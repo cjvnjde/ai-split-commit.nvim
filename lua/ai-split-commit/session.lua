@@ -13,6 +13,8 @@ local function make_group(session, opts)
     title = opts.title or "New group",
     criticality = opts.criticality or "medium",
     item_ids = opts.item_ids or {},
+    commit_message = opts.commit_message or "",
+    message_source = opts.message_source or nil,
     stale = opts.stale or false,
   }
 end
@@ -65,7 +67,11 @@ local function sort_groups_by_criticality(groups)
   end)
 end
 
-local function build_groups_from_ai(session, ai_result)
+local function group_items_key(item_ids)
+  return table.concat(item_ids or {}, ",")
+end
+
+local function build_groups_from_ai(session, ai_result, preserved)
   local assigned = {}
 
   for _, ai_group in ipairs((ai_result and ai_result.groups) or {}) do
@@ -79,10 +85,14 @@ local function build_groups_from_ai(session, ai_result)
     end
 
     if #item_ids > 0 then
+      local previous = preserved and preserved[group_items_key(item_ids)] or nil
+
       table.insert(session.groups, make_group(session, {
         title = ai_group.title or "Unnamed group",
         criticality = ai_group.criticality or "medium",
         item_ids = item_ids,
+        commit_message = previous and previous.commit_message or "",
+        message_source = previous and previous.message_source or nil,
       }))
     end
   end
@@ -141,6 +151,14 @@ function M.get_group_title(group)
   return title ~= "" and title or (group.kind == "unassigned" and "Unassigned" or "(unnamed)")
 end
 
+function M.has_commit_message(group)
+  return group and group.kind == "normal" and utils.trim(group.commit_message or "") ~= ""
+end
+
+function M.get_commit_message(group)
+  return group and (group.commit_message or "") or ""
+end
+
 function M.get_group(session, group_id)
   return session.groups_by_id[group_id]
 end
@@ -171,6 +189,34 @@ function M.count_group_files(session, group_id)
   end
 
   return vim.tbl_count(files)
+end
+
+function M.set_group_commit_message(session, group_id, message, source)
+  local group = M.get_group(session, group_id)
+
+  if not group or group.kind ~= "normal" then
+    return
+  end
+
+  group.commit_message = message or ""
+  group.message_source = source or group.message_source or "manual"
+  group.stale = false
+end
+
+function M.save_group_commit_message_if_needed(session, group_id, message)
+  local group = M.get_group(session, group_id)
+
+  if not group or group.kind ~= "normal" then
+    return
+  end
+
+  local normalized = message or ""
+
+  if normalized ~= (group.commit_message or "") then
+    group.commit_message = normalized
+    group.message_source = "manual"
+    group.stale = false
+  end
 end
 
 function M.rename_group(session, group_id, title)
@@ -204,12 +250,23 @@ function M.new(repo, ai_result, extra_prompt)
 end
 
 function M.apply_ai_groups(session, ai_result)
+  local preserved = {}
+
+  for _, group in ipairs(session.groups) do
+    if group.kind == "normal" and #group.item_ids > 0 and M.has_commit_message(group) then
+      preserved[group_items_key(group.item_ids)] = {
+        commit_message = group.commit_message,
+        message_source = group.message_source,
+      }
+    end
+  end
+
   session.groups = {}
   session.groups_by_id = {}
   session.item_to_group = {}
   session.next_group_id = 0
 
-  build_groups_from_ai(session, ai_result)
+  build_groups_from_ai(session, ai_result, preserved)
   select_first(session)
 end
 
@@ -380,6 +437,21 @@ function M.get_ordered_groups(session)
 
   for _, group in ipairs(session.groups) do
     if group.kind == "normal" and #group.item_ids > 0 then
+      table.insert(result, group)
+    end
+  end
+
+  return result
+end
+
+function M.get_groups_with_commit_messages(session, opts)
+  opts = opts or {}
+  local current_only = opts.current_only or false
+  local groups = current_only and { M.get_group(session, session.current_group_id) } or M.get_ordered_groups(session)
+  local result = {}
+
+  for _, group in ipairs(groups) do
+    if group and group.kind == "normal" and #group.item_ids > 0 and M.has_commit_message(group) then
       table.insert(result, group)
     end
   end
