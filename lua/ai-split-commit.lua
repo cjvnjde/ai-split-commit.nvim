@@ -9,6 +9,7 @@ M.config = {
   debug = false,
   grouping_prompt_template = nil,
   grouping_system_prompt = nil,
+  default_view_mode = "split", -- "split" or "group_diff"
 }
 
 M._active_session = nil
