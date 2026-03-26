@@ -216,6 +216,13 @@ function M.build_all_preview(session)
 
   for i, group in ipairs(S.get_ordered_groups(session)) do
     table.insert(parts, string.format("=== Group %d: [%s] %s ===", i, group.criticality, S.get_group_title(group)))
+
+    if S.has_commit_message(group) then
+      table.insert(parts, "")
+      table.insert(parts, "Commit message:")
+      vim.list_extend(parts, utils.split_lines(S.get_commit_message(group)))
+    end
+
     table.insert(parts, "")
     vim.list_extend(parts, utils.split_lines(M.build_group_diff(session, group.id)))
     table.insert(parts, "")
