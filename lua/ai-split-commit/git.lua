@@ -167,4 +167,115 @@ function M.stage_group(session, group)
   return true
 end
 
+local function restage_all(repo_root)
+  run(repo_root, { "add", "-A" })
+end
+
+local function create_backup_ref(repo_root, head)
+  if not head or head == "" then
+    return nil
+  end
+
+  local ref = "refs/ai-split-commit/backup/" .. os.date "%Y%m%d-%H%M%S"
+  return run_ok(repo_root, { "update-ref", ref, head }) and ref or nil
+end
+
+local function commit_with_message(repo_root, message)
+  local path = vim.fn.tempname()
+
+  if not utils.write_file(path, message) then
+    return nil, "Failed to write temporary commit message file."
+  end
+
+  local output, code = run(repo_root, { "commit", "-F", path })
+  vim.fn.delete(path)
+
+  if code ~= 0 then
+    return nil, utils.trim(output)
+  end
+
+  return true
+end
+
+local function format_error(message, backup_ref)
+  if backup_ref then
+    return string.format("%s (backup: %s)", message, backup_ref)
+  end
+
+  return message
+end
+
+local function stage_and_commit_group(session, group, cumulative, backup_ref)
+  local diff_mod = require "ai-split-commit.diff"
+  local repo_root = session.repo.repo_root
+  local touched_files = {}
+
+  for _, item_id in ipairs(group.item_ids) do
+    local item = session.repo.items_by_id[item_id]
+
+    if item then
+      cumulative[item.path] = cumulative[item.path] or {}
+      cumulative[item.path][item_id] = true
+      touched_files[item.path] = true
+    end
+  end
+
+  for path in pairs(touched_files) do
+    local file = session.repo.files_by_path[path]
+    local snapshot, snap_err = diff_mod.build_file_snapshot(file, cumulative[path])
+
+    if not snapshot then
+      restage_all(repo_root)
+      return nil, format_error(snap_err, backup_ref)
+    end
+
+    local ok, idx_err = write_snapshot_to_index(repo_root, path, snapshot, file)
+
+    if not ok then
+      restage_all(repo_root)
+      return nil, format_error(idx_err, backup_ref)
+    end
+  end
+
+  local ok, commit_err = commit_with_message(repo_root, group.commit_message)
+
+  if not ok then
+    restage_all(repo_root)
+    return nil, format_error("Commit failed: " .. commit_err, backup_ref)
+  end
+
+  return true
+end
+
+--- Commit the provided groups in order using each group's saved commit message.
+--- After committing, remaining uncommitted changes are re-staged.
+function M.commit_groups(session, groups)
+  local repo_root = session.repo.repo_root
+  local backup_ref = create_backup_ref(repo_root, session.repo.head)
+
+  if not run_ok(repo_root, { "reset", "-q" }) then
+    return nil, "Failed to reset index."
+  end
+
+  local cumulative = {}
+  local committed = 0
+
+  for _, group in ipairs(groups or {}) do
+    local ok, err = stage_and_commit_group(session, group, cumulative, backup_ref)
+
+    if not ok then
+      return nil, err
+    end
+
+    committed = committed + 1
+  end
+
+  restage_all(repo_root)
+
+  return {
+    committed = committed,
+    backup_ref = backup_ref,
+  }
+end
+
 return M
