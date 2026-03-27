@@ -320,6 +320,11 @@ local function save_current_message(session)
     return
   end
 
+  -- Don't save while generating for this group (buffer shows read-only placeholder)
+  if session.ui.generating and session.ui.generating.current_group_id == group.id then
+    return
+  end
+
   local lines = vim.api.nvim_buf_get_lines(session.ui.message_buf, 0, -1, false)
   local message = message_lines_to_text(lines)
   require("ai-split-commit.session").save_group_commit_message_if_needed(session, group.id, message)
@@ -906,6 +911,7 @@ local function action_generate_commit(session)
         end
 
         S.set_group_commit_message(session, group.id, message, "ai")
+        session.ui.generating = nil
         render_groups(session)
         render_message(session)
         vim.notify('Saved commit message for group "' .. S.get_group_title(group) .. '".', vim.log.levels.INFO)
@@ -1010,6 +1016,10 @@ local function action_generate_all_commit_messages(session)
             )
           end
         end
+
+        -- Clear generating state before rendering so saved message is displayed
+        -- (step() will set it again for the next group)
+        session.ui.generating = nil
 
         if session.current_group_id == group.id then
           render_message(session)
