@@ -707,6 +707,11 @@ local function pick_target_group(session, opts, callback)
 end
 
 local function action_move_item(session)
+  if session.busy then
+    vim.notify("AISplitCommit is busy.", vim.log.levels.WARN)
+    return
+  end
+
   local item = current_item(session)
 
   if not item then
@@ -726,6 +731,11 @@ local function action_move_item(session)
 end
 
 local function action_move_item_new(session)
+  if session.busy then
+    vim.notify("AISplitCommit is busy.", vim.log.levels.WARN)
+    return
+  end
+
   local item = current_item(session)
 
   if not item then
@@ -738,6 +748,11 @@ local function action_move_item_new(session)
 end
 
 local function action_unassign_item(session)
+  if session.busy then
+    vim.notify("AISplitCommit is busy.", vim.log.levels.WARN)
+    return
+  end
+
   local item = current_item(session)
 
   if not item then
@@ -751,12 +766,22 @@ local function action_unassign_item(session)
 end
 
 local function action_add_group(session)
+  if session.busy then
+    vim.notify("AISplitCommit is busy.", vim.log.levels.WARN)
+    return
+  end
+
   require("ai-split-commit.session").add_group(session)
   render_all(session)
   focus(session.ui.message_win)
 end
 
 local function action_rename_group(session)
+  if session.busy then
+    vim.notify("AISplitCommit is busy.", vim.log.levels.WARN)
+    return
+  end
+
   local group = current_group(session)
 
   if not group or group.kind ~= "normal" then
@@ -774,6 +799,11 @@ local function action_rename_group(session)
 end
 
 local function action_merge_group(session)
+  if session.busy then
+    vim.notify("AISplitCommit is busy.", vim.log.levels.WARN)
+    return
+  end
+
   local group = current_group(session)
 
   if not group or group.kind ~= "normal" then
@@ -793,6 +823,11 @@ local function action_merge_group(session)
 end
 
 local function action_delete_group(session)
+  if session.busy then
+    vim.notify("AISplitCommit is busy.", vim.log.levels.WARN)
+    return
+  end
+
   local group = current_group(session)
 
   if not group or group.kind ~= "normal" then
@@ -805,6 +840,11 @@ local function action_delete_group(session)
 end
 
 local function action_reorder(session, dir)
+  if session.busy then
+    vim.notify("AISplitCommit is busy.", vim.log.levels.WARN)
+    return
+  end
+
   local group = current_group(session)
 
   if not group or group.kind ~= "normal" then
@@ -817,6 +857,11 @@ local function action_reorder(session, dir)
 end
 
 local function action_regroup_all(session)
+  if session.busy then
+    vim.notify("AISplitCommit is busy.", vim.log.levels.WARN)
+    return
+  end
+
   save_current_message(session)
   session.busy = true
 
@@ -1018,13 +1063,12 @@ local function action_generate_all_commit_messages(session)
         end
 
         -- Clear generating state before rendering so saved message is displayed
-        -- (step() will set it again for the next group)
+        -- (step() will set it again for the next group and re-render groups)
         session.ui.generating = nil
 
         if session.current_group_id == group.id then
           render_message(session)
         end
-        render_groups(session)
 
         index = index + 1
         step()
@@ -1079,6 +1123,8 @@ local function action_commit_saved_groups(session, current_only)
     return
   end
 
+  local total_groups = current_only and 1 or #S.get_ordered_groups(session)
+
   session.busy = true
   local result, err = require("ai-split-commit.git").commit_groups(session, groups)
   session.busy = false
@@ -1089,10 +1135,16 @@ local function action_commit_saved_groups(session, current_only)
   end
 
   M.close(session)
-  vim.notify(
-    string.format("Committed %d group(s). Run :AISplitCommit for remaining changes.", result.committed),
-    vim.log.levels.INFO
-  )
+
+  local skipped = total_groups - result.committed
+  local msg = string.format("Committed %d group(s).", result.committed)
+
+  if skipped > 0 then
+    msg = msg .. string.format(" Skipped %d group(s) without commit messages.", skipped)
+  end
+
+  msg = msg .. " Run :AISplitCommit for remaining changes."
+  vim.notify(msg, skipped > 0 and vim.log.levels.WARN or vim.log.levels.INFO)
 end
 
 local function action_close(session)
