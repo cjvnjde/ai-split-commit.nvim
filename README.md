@@ -289,57 +289,125 @@ Legend:
 
 ## Keymaps
 
-### All panes
+Keymaps follow the [blink.nvim](https://github.com/Saghen/blink.cmp) convention.
+Each entry maps a key to a list of actions. Actions are tried in order — if one
+returns `false` / `nil` (doesn't apply to the current pane), the next action runs.
+`"fallback"` at the end of the list feeds the original key to Neovim.
 
-| Key | Action |
-| --- | --- |
-| `q` | Close session |
-| `P` | Preview all groups in a new tab |
-| `gv` | Toggle between `split` and `group_diff` view |
-| `gs` | Stage current group only |
-| `gc` | Generate commit message suggestions for current group |
-| `ga` | Auto-generate one commit message for every group |
-| `cc` | Commit current group using its saved commit message |
-| `ca` | Commit all groups that have saved commit messages |
-| `<Tab>` | Cycle panes |
+Your custom keys are merged with the `preset`. Conflicting keys overwrite the
+preset. Set a key to `false` or `{}` to disable it.
 
-### Groups pane
+### Customizing keymaps
 
-| Key | Action |
-| --- | --- |
-| `j` / `k` | Move between groups |
-| `a` | Add group |
-| `e` | Rename group |
-| `M` | Merge current group into another |
-| `dd` | Delete group |
-| `J` / `K` | Reorder groups |
-| `R` | Regroup all with AI |
-| `<CR>` | Focus Changes pane |
+```lua
+opts = {
+  keymaps = {
+    -- set to 'none' to disable the 'default' preset
+    preset = "default",
 
-### Changes pane
+    -- remap
+    ["<Esc>"] = { "close" },
+    ["<C-j>"] = { "move_group_down", "fallback" },
+    ["<C-k>"] = { "move_group_up", "fallback" },
 
-| Key | Action |
-| --- | --- |
-| `j` / `k` | Move between items |
-| `m` | Move item to another group |
-| `n` | Move item to a new group |
-| `x` | Move item to Unassigned |
-| `<CR>` | Focus Diff pane |
+    -- disable a key from the preset
+    ["q"] = false,
 
-### Diff pane
+    -- custom function (return true to consume the key)
+    ["<C-g>"] = {
+      function(session, role)
+        if role ~= "groups" then return end
+        vim.notify("Groups: " .. #session.groups)
+        return true
+      end,
+      "fallback",
+    },
+  },
+}
+```
 
-| Key | Action |
-| --- | --- |
-| `<CR>` | Focus Commit Message pane |
+### Default preset
 
-### Commit Message pane
+```lua
+{
+  ["q"]     = { "close" },
+  ["P"]     = { "preview_all" },
+  ["gv"]    = { "toggle_view" },
+  ["gs"]    = { "stage_group" },
+  ["gc"]    = { "generate_commit" },
+  ["ga"]    = { "generate_all_commits" },
+  ["cc"]    = { "commit_current" },
+  ["ca"]    = { "commit_all" },
+  ["<Tab>"] = { "next_pane" },
+  ["<CR>"]  = { "confirm", "fallback" },
+  ["a"]     = { "add_group", "fallback" },
+  ["e"]     = { "rename_group", "fallback" },
+  ["M"]     = { "merge_group", "fallback" },
+  ["dd"]    = { "delete_group", "fallback" },
+  ["J"]     = { "move_group_down", "fallback" },
+  ["K"]     = { "move_group_up", "fallback" },
+  ["R"]     = { "regroup_all", "fallback" },
+  ["m"]     = { "move_item", "fallback" },
+  ["n"]     = { "move_item_new", "fallback" },
+  ["x"]     = { "unassign_item", "fallback" },
+}
+```
+
+Pane-specific actions (`add_group`, `move_item`, etc.) only fire in their
+respective pane. When they don't apply, the chain continues to `"fallback"`,
+so normal key behaviour is preserved in other panes (e.g. editing the commit
+message).
+
+### Action reference
+
+#### All panes
+
+| Default key | Action | Description |
+| --- | --- | --- |
+| `q` | `close` | Close session |
+| `P` | `preview_all` | Preview all groups in a new tab |
+| `gv` | `toggle_view` | Toggle between `split` and `group_diff` view |
+| `gs` | `stage_group` | Stage current group only |
+| `gc` | `generate_commit` | Generate commit message suggestions for current group |
+| `ga` | `generate_all_commits` | Auto-generate one commit message for every group |
+| `cc` | `commit_current` | Commit current group using its saved commit message |
+| `ca` | `commit_all` | Commit all groups that have saved commit messages |
+| `<Tab>` | `next_pane` | Cycle panes |
+| `<CR>` | `confirm` | Context-dependent: focus next pane / message pane |
+
+#### Groups pane
+
+| Default key | Action | Description |
+| --- | --- | --- |
+| `j` / `k` | *(built-in)* | Move between groups |
+| `a` | `add_group` | Add group |
+| `e` | `rename_group` | Rename group |
+| `M` | `merge_group` | Merge current group into another |
+| `dd` | `delete_group` | Delete group |
+| `J` / `K` | `move_group_down` / `move_group_up` | Reorder groups |
+| `R` | `regroup_all` | Regroup all with AI |
+
+#### Changes pane
+
+| Default key | Action | Description |
+| --- | --- | --- |
+| `j` / `k` | *(built-in)* | Move between items |
+| `m` | `move_item` | Move item to another group |
+| `n` | `move_item_new` | Move item to a new group |
+| `x` | `unassign_item` | Move item to Unassigned |
+
+#### Diff pane
+
+Shared keymaps only (see "All panes" above).
+
+#### Commit Message pane
 
 | Action | Description |
 | --- | --- |
 | normal editing | edit the saved message manually |
-| `gc` | replace/save a generated message for current group |
-| `ga` | auto-generate one message per group |
-| `cc` / `ca` | commit prepared groups |
+| `gc` (`generate_commit`) | replace/save a generated message for current group |
+| `ga` (`generate_all_commits`) | auto-generate one message per group |
+| `cc` / `ca` (`commit_current` / `commit_all`) | commit prepared groups |
 
 ---
 
@@ -400,6 +468,11 @@ opts = {
   grouping_prompt_template = nil,
   grouping_system_prompt = nil,
   default_view_mode = "split", -- "split" or "group_diff"
+  use_delta = true, -- use delta for rich diff rendering
+
+  keymaps = {
+    preset = "default",
+  },
 
   provider_config = {
     openrouter = { api_key = nil },
@@ -421,6 +494,9 @@ opts = {
 | `grouping_prompt_template` | `string?` | custom grouping prompt |
 | `grouping_system_prompt` | `string?` | custom grouping system prompt |
 | `default_view_mode` | `string` | `split` or `group_diff` |
+| `use_delta` | `boolean` | use [delta](https://github.com/dandavison/delta) for rich diff rendering |
+| `keymaps` | `table` | blink.nvim-style keymap config (see [Keymaps](#keymaps)) |
+| `keymaps.preset` | `string` | `"default"` or `"none"` |
 | `provider_config` | `table?` | forwarded to `ai-provider.setup()` |
 
 ---
