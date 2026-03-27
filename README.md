@@ -2,28 +2,26 @@
 
 Group staged changes semantically for review, inspection, and selective commits.
 
-`ai-split-commit.nvim` is a review-oriented plugin:
-- it analyzes your staged diff
-- proposes semantic groups
-- assigns a criticality level to each group
-- lets you move hunks between groups
-- integrates with `ai-commit.nvim` when you want to commit one group
+`ai-split-commit.nvim` is a review-oriented plugin. It analyzes your staged diff using AI, proposes semantic groups (e.g., "Fix auth refresh", "Refactor helpers", "Update docs"), assigns a criticality level to each group, and presents everything in a 4-pane review UI. You can move hunks between groups, rename/merge/reorder groups, generate commit messages per group (via [ai-commit.nvim](https://github.com/cjvnjde/ai-commit.nvim)), and commit groups individually or all at once — without leaving the UI.
 
-It is not just a commit tool — it is primarily a change-inspection workflow.
+It is not just a commit tool — it is primarily a **change-inspection workflow** that helps you create clean, focused commits from a messy staging area.
 
 ## Features
 
-- AI-powered semantic grouping
-- criticality levels per group (`high`, `medium`, `low`)
-- 4-pane review UI: groups / changes / diff / commit message
-- switchable view modes:
-  - `split` → groups / changes / diff
-  - `group_diff` → groups / wide group diff
-- move hunks between groups
-- create, rename, merge, delete, reorder groups
-- stage one group for manual commit
-- commit one group through `ai-commit.nvim`
-- OpenRouter and GitHub Copilot support via `ai-provider.nvim`
+- AI-powered semantic grouping of staged changes
+- Criticality levels per group (`high`, `medium`, `low`)
+- 4-pane review UI: groups / changes / diff preview / commit message
+- Two view modes: `split` (detailed) and `group_diff` (wide group diff)
+- Move hunks between groups
+- Create, rename, merge, delete, reorder groups
+- Re-group everything with AI at any time
+- Generate commit messages per group through `ai-commit.nvim`
+- Batch-generate one commit message per group automatically
+- Commit one group or all prepared groups at once
+- Stage one group for manual commit
+- [delta](https://github.com/dandavison/delta) support for rich diff rendering
+- Blink.nvim-style keymap customization
+- Backup ref created before multi-group commits
 
 ---
 
@@ -33,15 +31,14 @@ It is not just a commit tool — it is primarily a change-inspection workflow.
 - Git
 - [plenary.nvim](https://github.com/nvim-lua/plenary.nvim)
 - [ai-provider.nvim](https://github.com/cjvnjde/ai-provider.nvim)
-- [ai-commit.nvim](https://github.com/cjvnjde/ai-commit.nvim) *(optional, for `gc` integration)*
+- [ai-commit.nvim](https://github.com/cjvnjde/ai-commit.nvim) *(optional — needed for `gc`/`ga` commit message generation)*
+- [delta](https://github.com/dandavison/delta) *(optional — for rich diff rendering)*
 
 ---
 
 ## Installation
 
-## 1. Review-only setup
-
-If you only want semantic grouping / inspection:
+Using [lazy.nvim](https://github.com/folke/lazy.nvim):
 
 ```lua
 {
@@ -49,6 +46,7 @@ If you only want semantic grouping / inspection:
   dependencies = {
     "nvim-lua/plenary.nvim",
     "cjvnjde/ai-provider.nvim",
+    "cjvnjde/ai-commit.nvim",  -- optional, for commit message generation
   },
   opts = {
     provider = "github-copilot",
@@ -57,7 +55,37 @@ If you only want semantic grouping / inspection:
 }
 ```
 
-## 2. Full integration with ai-commit.nvim
+---
+
+## Setup
+
+```lua
+require("ai-split-commit").setup(opts)
+```
+
+### Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `provider` | `string` | `"openrouter"` | AI provider to use. One of `"openrouter"`, `"github-copilot"`, `"anthropic"`, `"google"`, `"openai"`, `"xai"`, `"groq"`, `"cerebras"`, `"mistral"`. |
+| `model` | `string` | `"google/gemini-2.5-flash"` | Model ID for the selected provider. Use `:AISplitCommitModels` to browse available models. |
+| `max_tokens` | `number` | `4096` | Maximum output tokens for the AI response. |
+| `max_item_diff_length` | `number` | `1200` | Per-item diff truncation (in characters) before sending to AI for grouping. Longer hunks are truncated with `... (truncated)`. This controls how much context the AI sees per hunk. |
+| `max_group_count` | `number` | `8` | Soft cap for the number of groups the AI proposes. The AI is instructed to prefer 1 to this many groups. |
+| `debug` | `boolean` | `false` | Save grouping prompts to `~/.cache/nvim/ai-split-commit-debug/` for inspection. |
+| `grouping_prompt_template` | `string?` | `nil` | Custom user prompt for the grouping request. When `nil`, the built-in template is used. See [Prompt Customization](#prompt-customization). |
+| `grouping_system_prompt` | `string?` | `nil` | Custom system prompt for the grouping request. When `nil`, the built-in system prompt is used. |
+| `default_view_mode` | `string` | `"split"` | Initial view mode when opening the UI. `"split"` shows groups/changes/diff columns. `"group_diff"` hides the changes column and shows a wider diff. |
+| `use_delta` | `boolean` | `true` | Use [delta](https://github.com/dandavison/delta) for rich diff rendering if it is installed. Falls back to plain diff syntax highlighting when delta is not available or this is `false`. |
+| `keymaps` | `table` | `{ preset = "default" }` | Blink.nvim-style keymap configuration. See [Keymaps](#keymaps). |
+| `keymaps.preset` | `string` | `"default"` | Base keymap preset. `"default"` loads the built-in keymaps. `"none"` starts with no keymaps. |
+| `provider_config` | `table?` | `nil` | Provider-specific settings forwarded to `ai-provider.setup()`. See [ai-provider.nvim](https://github.com/cjvnjde/ai-provider.nvim) for details. |
+
+---
+
+## Configuration Examples
+
+### 1. GitHub Copilot — simple setup
 
 ```lua
 {
@@ -74,54 +102,26 @@ If you only want semantic grouping / inspection:
 }
 ```
 
-## 3. Local development setup
-
-```lua
-{
-  dir = "/mnt/shared/projects/personal/nvim-plugins/ai-split-commit.nvim",
-  dependencies = {
-    "nvim-lua/plenary.nvim",
-    { dir = "/mnt/shared/projects/personal/nvim-plugins/ai-provider.nvim" },
-    { dir = "/mnt/shared/projects/personal/nvim-plugins/ai-commit.nvim" },
-  },
-  opts = {
-    provider = "github-copilot",
-    model = "gpt-5-mini",
-  },
-}
-```
-
----
-
-## Provider setup
-
-## GitHub Copilot
-
-```lua
-{
-  "cjvnjde/ai-split-commit.nvim",
-  opts = {
-    provider = "github-copilot",
-    model = "gpt-5-mini",
-  },
-}
-```
-
-Authenticate once:
+Then authenticate once:
 
 ```vim
 :AISplitCommitLogin
 ```
 
-## OpenRouter
+### 2. OpenRouter with Gemini
 
 ```bash
-export OPENROUTER_API_KEY=sk-...
+export OPENROUTER_API_KEY=sk-or-...
 ```
 
 ```lua
 {
   "cjvnjde/ai-split-commit.nvim",
+  dependencies = {
+    "nvim-lua/plenary.nvim",
+    "cjvnjde/ai-provider.nvim",
+    "cjvnjde/ai-commit.nvim",
+  },
   opts = {
     provider = "openrouter",
     model = "google/gemini-2.5-flash",
@@ -129,14 +129,303 @@ export OPENROUTER_API_KEY=sk-...
 }
 ```
 
-### Forward provider config through the plugin
+### 3. OpenRouter with explicit API key
 
 ```lua
 {
   "cjvnjde/ai-split-commit.nvim",
+  dependencies = {
+    "nvim-lua/plenary.nvim",
+    "cjvnjde/ai-provider.nvim",
+    "cjvnjde/ai-commit.nvim",
+  },
+  opts = {
+    provider = "openrouter",
+    model = "google/gemini-2.5-flash",
+    provider_config = {
+      openrouter = {
+        api_key = "sk-or-your-key-here",
+      },
+    },
+  },
+}
+```
+
+### 4. GitHub Copilot with Claude Sonnet 4.6
+
+```lua
+{
+  "cjvnjde/ai-split-commit.nvim",
+  dependencies = {
+    "nvim-lua/plenary.nvim",
+    "cjvnjde/ai-provider.nvim",
+    "cjvnjde/ai-commit.nvim",
+  },
+  opts = {
+    provider = "github-copilot",
+    model = "claude-sonnet-4.6",
+  },
+}
+```
+
+### 5. GitHub Enterprise Copilot
+
+```lua
+{
+  "cjvnjde/ai-split-commit.nvim",
+  dependencies = {
+    "nvim-lua/plenary.nvim",
+    "cjvnjde/ai-provider.nvim",
+    "cjvnjde/ai-commit.nvim",
+  },
   opts = {
     provider = "github-copilot",
     model = "gpt-5-mini",
+    provider_config = {
+      ["github-copilot"] = {
+        enterprise_domain = "company.ghe.com",
+      },
+    },
+  },
+}
+```
+
+### 6. Review-only (no ai-commit.nvim dependency)
+
+If you only want semantic grouping and inspection without `gc`/`ga` commit message generation:
+
+```lua
+{
+  "cjvnjde/ai-split-commit.nvim",
+  dependencies = {
+    "nvim-lua/plenary.nvim",
+    "cjvnjde/ai-provider.nvim",
+  },
+  opts = {
+    provider = "github-copilot",
+    model = "gpt-5-mini",
+  },
+}
+```
+
+You can still use `gs` to stage a group and commit manually.
+
+### 7. Group diff view mode by default
+
+```lua
+{
+  "cjvnjde/ai-split-commit.nvim",
+  dependencies = {
+    "nvim-lua/plenary.nvim",
+    "cjvnjde/ai-provider.nvim",
+    "cjvnjde/ai-commit.nvim",
+  },
+  opts = {
+    provider = "github-copilot",
+    model = "gpt-5-mini",
+    default_view_mode = "group_diff",
+  },
+}
+```
+
+### 8. Disable delta rendering
+
+```lua
+{
+  "cjvnjde/ai-split-commit.nvim",
+  dependencies = {
+    "nvim-lua/plenary.nvim",
+    "cjvnjde/ai-provider.nvim",
+    "cjvnjde/ai-commit.nvim",
+  },
+  opts = {
+    provider = "github-copilot",
+    model = "gpt-5-mini",
+    use_delta = false,
+  },
+}
+```
+
+### 9. Allow more groups with more context per hunk
+
+```lua
+{
+  "cjvnjde/ai-split-commit.nvim",
+  dependencies = {
+    "nvim-lua/plenary.nvim",
+    "cjvnjde/ai-provider.nvim",
+    "cjvnjde/ai-commit.nvim",
+  },
+  opts = {
+    provider = "openrouter",
+    model = "google/gemini-2.5-pro",
+    max_group_count = 12,
+    max_item_diff_length = 3000,
+    max_tokens = 8192,
+  },
+}
+```
+
+### 10. Custom keymaps
+
+```lua
+{
+  "cjvnjde/ai-split-commit.nvim",
+  dependencies = {
+    "nvim-lua/plenary.nvim",
+    "cjvnjde/ai-provider.nvim",
+    "cjvnjde/ai-commit.nvim",
+  },
+  opts = {
+    provider = "github-copilot",
+    model = "gpt-5-mini",
+    keymaps = {
+      preset = "default",
+      -- remap
+      ["<Esc>"] = { "close" },
+      ["<C-j>"] = { "move_group_down", "fallback" },
+      ["<C-k>"] = { "move_group_up", "fallback" },
+      -- disable a key
+      ["q"] = false,
+    },
+  },
+}
+```
+
+### 11. Start from scratch keymaps
+
+```lua
+{
+  "cjvnjde/ai-split-commit.nvim",
+  dependencies = {
+    "nvim-lua/plenary.nvim",
+    "cjvnjde/ai-provider.nvim",
+    "cjvnjde/ai-commit.nvim",
+  },
+  opts = {
+    provider = "github-copilot",
+    model = "gpt-5-mini",
+    keymaps = {
+      preset = "none",
+      ["<Esc>"] = { "close" },
+      ["gc"] = { "generate_commit" },
+      ["ga"] = { "generate_all_commits" },
+      ["cc"] = { "commit_current" },
+      ["ca"] = { "commit_all" },
+      ["<Tab>"] = { "next_pane" },
+    },
+  },
+}
+```
+
+### 12. Different providers for grouping vs. commit messages
+
+Use a fast model for grouping in `ai-split-commit.nvim` and a stronger model for commit messages in `ai-commit.nvim`:
+
+```lua
+-- ai-split-commit: fast grouping
+{
+  "cjvnjde/ai-split-commit.nvim",
+  dependencies = {
+    "nvim-lua/plenary.nvim",
+    "cjvnjde/ai-provider.nvim",
+    "cjvnjde/ai-commit.nvim",
+  },
+  opts = {
+    provider = "github-copilot",
+    model = "gpt-5-mini",
+  },
+},
+
+-- ai-commit: stronger model for commit messages
+{
+  "cjvnjde/ai-commit.nvim",
+  dependencies = {
+    "nvim-lua/plenary.nvim",
+    "nvim-telescope/telescope.nvim",
+    "cjvnjde/ai-provider.nvim",
+  },
+  opts = {
+    provider = "openrouter",
+    model = "anthropic/claude-sonnet-4",
+  },
+}
+```
+
+### 13. Both plugins on the same Copilot model
+
+```lua
+{
+  "cjvnjde/ai-split-commit.nvim",
+  dependencies = {
+    "nvim-lua/plenary.nvim",
+    "cjvnjde/ai-provider.nvim",
+    "cjvnjde/ai-commit.nvim",
+  },
+  opts = {
+    provider = "github-copilot",
+    model = "gpt-5-mini",
+  },
+},
+{
+  "cjvnjde/ai-commit.nvim",
+  dependencies = {
+    "nvim-lua/plenary.nvim",
+    "nvim-telescope/telescope.nvim",
+    "cjvnjde/ai-provider.nvim",
+  },
+  opts = {
+    provider = "github-copilot",
+    model = "gpt-5-mini",
+  },
+}
+```
+
+### 14. Debug mode
+
+```lua
+{
+  "cjvnjde/ai-split-commit.nvim",
+  dependencies = {
+    "nvim-lua/plenary.nvim",
+    "cjvnjde/ai-provider.nvim",
+    "cjvnjde/ai-commit.nvim",
+  },
+  opts = {
+    provider = "github-copilot",
+    model = "gpt-5-mini",
+    debug = true,
+  },
+}
+```
+
+Prompts are saved to `~/.cache/nvim/ai-split-commit-debug/`.
+
+### 15. Full kitchen-sink configuration
+
+```lua
+{
+  "cjvnjde/ai-split-commit.nvim",
+  dependencies = {
+    "nvim-lua/plenary.nvim",
+    "cjvnjde/ai-provider.nvim",
+    "cjvnjde/ai-commit.nvim",
+  },
+  opts = {
+    provider = "github-copilot",
+    model = "claude-sonnet-4.6",
+    max_tokens = 8192,
+    max_item_diff_length = 2000,
+    max_group_count = 10,
+    debug = false,
+    default_view_mode = "split",
+    use_delta = true,
+    keymaps = {
+      preset = "default",
+      ["<Esc>"] = { "close" },
+      ["<C-j>"] = { "move_group_down", "fallback" },
+      ["<C-k>"] = { "move_group_up", "fallback" },
+    },
     provider_config = {
       ["github-copilot"] = {
         enterprise_domain = "company.ghe.com",
@@ -150,7 +439,7 @@ export OPENROUTER_API_KEY=sk-...
 
 ## Workflow
 
-## Basic review flow
+### Basic review flow
 
 1. Stage your changes:
 
@@ -166,72 +455,50 @@ git add .
 
 3. Review the proposed groups
 4. Move hunks / rename / merge / reorder as needed
-5. Generate commit messages **without leaving the UI**
+5. Generate commit messages without leaving the UI
 6. Edit saved commit messages if you want
 7. Commit current group or all prepared groups
 
-## Recommended workflow
-
-A good flow is:
+### Recommended workflow
 
 1. `:AISplitCommit`
-2. move between groups
-3. press `gc` on a group
-4. pick a message from `ai-commit.nvim` Telescope suggestions
-5. the message is saved on that group
-6. repeat for the other groups
-7. optionally edit the saved message in the bottom commit-message pane
-8. press:
-   - `cc` to commit the current prepared group
-   - `ca` to commit all groups that already have saved commit messages
+2. Navigate between groups
+3. Press `gc` on a group to generate commit message suggestions
+4. Pick a message from `ai-commit.nvim` Telescope picker
+5. The message is saved on that group
+6. Repeat for other groups
+7. Optionally edit the saved message in the bottom commit-message pane
+8. Press `cc` to commit the current group, or `ca` to commit all prepared groups
 
-## Batch flow
+### Batch flow
 
-If you want commit messages for all groups quickly:
+Generate commit messages for all groups at once:
 
 1. `:AISplitCommit`
-2. press `ga`
-3. the plugin automatically uses each group's name as commit guidance
-4. it asks `ai-commit.nvim` for **one** message per group
-5. the first generated message is saved on each group
-6. press `ca` to commit them
-
-## Example scenario
-
-You changed code for two reasons:
-- feature work
-- refactor / cleanup
-
-Run `:AISplitCommit` and AI may propose:
-- `Add provider fallback support` — `medium`
-- `Refactor request helpers` — `low`
-
-Then you can:
-- move a wrongly-grouped hunk
-- rename a group
-- press `gc` on `Add provider fallback support`
-- pick one suggested commit message
-- press `gc` on `Refactor request helpers`
-- pick another commit message
-- press `ca` to create both commits in order
+2. Press `ga`
+3. The plugin uses each group's name as commit guidance
+4. It asks `ai-commit.nvim` for one message per group automatically
+5. Press `ca` to commit all groups
 
 ---
 
-## Criticality levels
+## Criticality Levels
 
-Each group gets a criticality level:
+Each group gets a criticality level assigned by the AI:
 
-- `▲ high` — bug fixes, breaking changes, security-sensitive work
-- `● medium` — features, important behavior changes, significant refactors
-- `▽ low` — docs, tests, style, cleanup, comments
+| Level | Icon | Meaning |
+|-------|------|---------|
+| `high` | `▲` | Bug fixes, breaking changes, security-sensitive work |
+| `medium` | `●` | Features, important behavior changes, significant refactors |
+| `low` | `▽` | Docs, tests, style, cleanup, comments |
 
 This is a review aid, not a hard rule.
 
 ---
 
-## UI layout
+## UI Layout
 
-### Split view
+### Split view (default)
 
 ```text
 ┌──────────────────────┬────────────────────────────┬──────────────────────┐
@@ -280,51 +547,29 @@ This is a review aid, not a hard rule.
 ```
 
 Legend:
-- `f` = file count
-- `i` = item count (hunks / file-level diff items)
-- `[msg]` = this group already has a saved commit message
-- `[*]` = this group changed after grouping / message generation and should be reviewed again
+- `f` = file count, `i` = item count (hunks / file-level diff items)
+- `[msg]` = this group has a saved commit message
+- `[*]` = this group changed after grouping and should be reviewed again
+
+---
+
+## Commands
+
+| Command | Description |
+| --- | --- |
+| `:AISplitCommit [extra prompt]` | Start a review session. Optional extra instructions are passed to the grouping prompt. |
+| `:AISplitCommitModels [provider]` | Browse and select a model for the current or specified provider. |
+| `:AISplitCommitLogin [provider]` | Authenticate with a provider (default: current provider). Required for GitHub Copilot. |
+| `:AISplitCommitLogout [provider]` | Remove stored credentials for a provider. |
+| `:AISplitCommitStatus` | Show current provider, model, and authentication status. |
 
 ---
 
 ## Keymaps
 
-Keymaps follow the [blink.nvim](https://github.com/Saghen/blink.cmp) convention.
-Each entry maps a key to a list of actions. Actions are tried in order — if one
-returns `false` / `nil` (doesn't apply to the current pane), the next action runs.
-`"fallback"` at the end of the list feeds the original key to Neovim.
+Keymaps follow the [blink.nvim](https://github.com/Saghen/blink.cmp) convention. Each entry maps a key to a list of actions. Actions are tried in order — if one returns `false`/`nil` (doesn't apply to the current pane), the next action runs. `"fallback"` at the end of the list feeds the original key to Neovim.
 
-Your custom keys are merged with the `preset`. Conflicting keys overwrite the
-preset. Set a key to `false` or `{}` to disable it.
-
-### Customizing keymaps
-
-```lua
-opts = {
-  keymaps = {
-    -- set to 'none' to disable the 'default' preset
-    preset = "default",
-
-    -- remap
-    ["<Esc>"] = { "close" },
-    ["<C-j>"] = { "move_group_down", "fallback" },
-    ["<C-k>"] = { "move_group_up", "fallback" },
-
-    -- disable a key from the preset
-    ["q"] = false,
-
-    -- custom function (return true to consume the key)
-    ["<C-g>"] = {
-      function(session, role)
-        if role ~= "groups" then return end
-        vim.notify("Groups: " .. #session.groups)
-        return true
-      end,
-      "fallback",
-    },
-  },
-}
-```
+Your custom keys are merged with the `preset`. Conflicting keys overwrite the preset. Set a key to `false` or `{}` to disable it.
 
 ### Default preset
 
@@ -353,12 +598,28 @@ opts = {
 }
 ```
 
-Pane-specific actions (`add_group`, `move_item`, etc.) only fire in their
-respective pane. When they don't apply, the chain continues to `"fallback"`,
-so normal key behaviour is preserved in other panes (e.g. editing the commit
-message).
+### Customizing keymaps
 
-### Action reference
+```lua
+keymaps = {
+  preset = "default",         -- or "none"
+  ["<Esc>"] = { "close" },   -- add new
+  ["q"] = false,              -- disable from preset
+  ["<C-j>"] = { "move_group_down", "fallback" },
+  ["<C-k>"] = { "move_group_up", "fallback" },
+  -- custom function (return true to consume the key)
+  ["<C-g>"] = {
+    function(session, role)
+      if role ~= "groups" then return end
+      vim.notify("Groups: " .. #session.groups)
+      return true
+    end,
+    "fallback",
+  },
+}
+```
+
+### Action Reference
 
 #### All panes
 
@@ -367,212 +628,64 @@ message).
 | `q` | `close` | Close session |
 | `P` | `preview_all` | Preview all groups in a new tab |
 | `gv` | `toggle_view` | Toggle between `split` and `group_diff` view |
-| `gs` | `stage_group` | Stage current group only |
-| `gc` | `generate_commit` | Generate commit message suggestions for current group |
-| `ga` | `generate_all_commits` | Auto-generate one commit message for every group |
+| `gs` | `stage_group` | Stage current group only (then close) |
+| `gc` | `generate_commit` | Generate commit message suggestions for current group (requires `ai-commit.nvim`) |
+| `ga` | `generate_all_commits` | Auto-generate one commit message for every group (requires `ai-commit.nvim`) |
 | `cc` | `commit_current` | Commit current group using its saved commit message |
 | `ca` | `commit_all` | Commit all groups that have saved commit messages |
-| `<Tab>` | `next_pane` | Cycle panes |
+| `<Tab>` | `next_pane` | Cycle through panes |
 | `<CR>` | `confirm` | Context-dependent: focus next pane / message pane |
 
 #### Groups pane
 
 | Default key | Action | Description |
 | --- | --- | --- |
-| `j` / `k` | *(built-in)* | Move between groups |
-| `a` | `add_group` | Add group |
-| `e` | `rename_group` | Rename group |
+| `a` | `add_group` | Create a new empty group |
+| `e` | `rename_group` | Rename current group |
 | `M` | `merge_group` | Merge current group into another |
-| `dd` | `delete_group` | Delete group |
+| `dd` | `delete_group` | Delete group (items go to Unassigned) |
 | `J` / `K` | `move_group_down` / `move_group_up` | Reorder groups |
-| `R` | `regroup_all` | Regroup all with AI |
+| `R` | `regroup_all` | Re-run AI grouping on all items |
 
 #### Changes pane
 
 | Default key | Action | Description |
 | --- | --- | --- |
-| `j` / `k` | *(built-in)* | Move between items |
 | `m` | `move_item` | Move item to another group |
 | `n` | `move_item_new` | Move item to a new group |
 | `x` | `unassign_item` | Move item to Unassigned |
 
-#### Diff pane
-
-Shared keymaps only (see "All panes" above).
-
 #### Commit Message pane
 
-| Action | Description |
-| --- | --- |
-| normal editing | edit the saved message manually |
-| `gc` (`generate_commit`) | replace/save a generated message for current group |
-| `ga` (`generate_all_commits`) | auto-generate one message per group |
-| `cc` / `ca` (`commit_current` / `commit_all`) | commit prepared groups |
-
----
-
-## View modes
-
-### `split`
-Default classic layout:
-- Groups
-- Changes
-- Diff
-- Commit Message
-
-Use this when you want item-level inspection.
-
-### `group_diff`
-Hides the middle **Changes** column and makes the selected group's diff much wider.
-
-Use this when you want to review one whole group's patch like a long preview stripe.
-
-Switch anytime with:
-
-```text
-gv
-```
-
-You can also set the default mode in config:
-
-```lua
-opts = {
-  default_view_mode = "group_diff",
-}
-```
-
----
-
-## Commands
-
-| Command | Description |
-| --- | --- |
-| `:AISplitCommit [extra prompt]` | Start review session |
-| `:AISplitCommitModels [provider]` | Choose model |
-| `:AISplitCommitLogin [provider]` | Authenticate provider |
-| `:AISplitCommitLogout [provider]` | Remove credentials |
-| `:AISplitCommitStatus` | Show provider + model + auth status |
-
----
-
-## Configuration
-
-```lua
-{
-  provider = "openrouter",
-  model = "google/gemini-2.5-flash",
-  max_tokens = 4096,
-  max_item_diff_length = 1200,
-  max_group_count = 8,
-  debug = false,
-  grouping_prompt_template = nil,
-  grouping_system_prompt = nil,
-  default_view_mode = "split", -- "split" or "group_diff"
-  use_delta = true, -- use delta for rich diff rendering
-
-  keymaps = {
-    preset = "default",
-  },
-
-  provider_config = {
-    openrouter = { api_key = nil },
-    ["github-copilot"] = { enterprise_domain = nil },
-  },
-}
-```
-
-## Options
-
-| Option | Type | Description |
-| --- | --- | --- |
-| `provider` | `string` | `openrouter` or `github-copilot` |
-| `model` | `string` | model ID for the selected provider |
-| `max_tokens` | `number` | max output tokens |
-| `max_item_diff_length` | `number` | per-item diff truncation for AI grouping |
-| `max_group_count` | `number` | soft cap for number of proposed groups |
-| `debug` | `boolean` | save prompts to cache |
-| `grouping_prompt_template` | `string?` | custom grouping prompt |
-| `grouping_system_prompt` | `string?` | custom grouping system prompt |
-| `default_view_mode` | `string` | `split` or `group_diff` |
-| `use_delta` | `boolean` | use [delta](https://github.com/dandavison/delta) for rich diff rendering |
-| `keymaps` | `table` | blink.nvim-style keymap config (see [Keymaps](#keymaps)) |
-| `keymaps.preset` | `string` | `"default"` or `"none"` |
-| `provider_config` | `table?` | forwarded to `ai-provider.setup()` |
+Normal editing works. Additionally, `gc`, `ga`, `cc`, `ca` work from this pane too.
 
 ---
 
 ## Integration with ai-commit.nvim
 
-`gc` uses `ai-commit.nvim` to generate suggestions for the **selected group diff** without leaving the split view.
+When you press `gc` or `ga`, `ai-split-commit.nvim` calls `ai-commit.nvim` under the hood:
 
-Interactive generation:
+- `gc` generates commit message suggestions for the **selected group's diff** (not the full staged diff) and opens a Telescope picker
+- `ga` auto-generates **one** commit message per group without opening Telescope
+- The generated message is saved on the group
+- The actual `git commit` happens later when you press `cc` or `ca`
 
-```lua
-require("ai-commit").generate_commit_for_diff(diff_text, {
-  extra_prompt = "Group name: Add provider fallback support",
-  on_select = function(message)
-    -- save selected message on the current group
-  end,
-})
-```
-
-Batch generation:
-
-```lua
-require("ai-commit").generate_commit_messages_for_diff(diff_text, {
-  extra_prompt = [[
-    Group name: Add provider fallback support
-    Generate exactly one commit message only.
-  ]],
-}, function(messages, err)
-  -- save messages[1] on the group
-end)
-```
-
-That means:
-- commit suggestions are generated from the current group's diff
-- not from the full staged diff
-- the selected message is saved on the group
-- the actual `git commit` happens later when you press `cc` or `ca`
-
-If `ai-commit.nvim` is not installed, `gc` / `ga` are unavailable, but inspection and grouping still work.
+If `ai-commit.nvim` is not installed, `gc` / `ga` are unavailable, but inspection, grouping, and manual message editing still work.
 
 ---
 
-## Example configurations
+## Prompt Customization
 
-## 1. Use the same Copilot model for both plugins
+### Available placeholders
 
-```lua
-{
-  dir = "/mnt/shared/projects/personal/nvim-plugins/ai-split-commit.nvim",
-  dependencies = {
-    "nvim-lua/plenary.nvim",
-    "cjvnjde/ai-provider.nvim",
-    { dir = "/mnt/shared/projects/personal/nvim-plugins/ai-commit.nvim" },
-  },
-  opts = {
-    provider = "github-copilot",
-    model = "gpt-5-mini",
-  },
-},
-{
-  dir = "/mnt/shared/projects/personal/nvim-plugins/ai-commit.nvim",
-  dependencies = {
-    "nvim-lua/plenary.nvim",
-    "nvim-telescope/telescope.nvim",
-    "cjvnjde/ai-provider.nvim",
-  },
-  opts = {
-    provider = "github-copilot",
-    model = "gpt-5-mini",
-  },
-}
-```
+| Placeholder | Description |
+|-------------|-------------|
+| `<items/>` | The list of items with their IDs, paths, and truncated diffs |
+| `<recent_commits/>` | The last 5 commit subjects |
+| `<extra_prompt/>` | Extra instructions passed via `:AISplitCommit ...` args |
+| `<max_group_count/>` | The configured `max_group_count` value |
 
-## 2. Use different providers per plugin
-
-Example: fast grouping on Copilot, commit messages on OpenRouter.
+### Example: custom grouping prompt
 
 ```lua
 {
@@ -580,63 +693,38 @@ Example: fast grouping on Copilot, commit messages on OpenRouter.
   opts = {
     provider = "github-copilot",
     model = "gpt-5-mini",
-  },
-},
-{
-  "cjvnjde/ai-commit.nvim",
-  opts = {
-    provider = "openrouter",
-    model = "google/gemini-2.5-pro",
+    grouping_prompt_template = [[
+Split the staged changes into semantic groups.
+Prefer fewer groups. Use all item IDs.
+
+<extra_prompt/>
+
+Recent commits:
+<recent_commits/>
+
+Items:
+<items/>
+]],
   },
 }
 ```
-
-## 3. Use it only for inspection
-
-```lua
-{
-  "cjvnjde/ai-split-commit.nvim",
-  dependencies = {
-    "nvim-lua/plenary.nvim",
-    "cjvnjde/ai-provider.nvim",
-  },
-  opts = {
-    provider = "github-copilot",
-    model = "gpt-5-mini",
-  },
-}
-```
-
-Then use:
-- `:AISplitCommit`
-- inspect the groups
-- `gs` to stage one group
-- commit manually however you want
 
 ---
 
 ## Logging
 
-When grouping starts, you now see a single clearer notification.
-
-Example:
+When grouping starts, you see a single notification:
 
 ```text
 Sending AI request: AISplitCommit[grouping] -> github-copilot / gpt-5-mini -> api.githubcopilot.com
 ```
 
-So you can always see:
-- which plugin triggered the request
-- which provider is being used
-- which model is being used
-- which host receives the request
-
 ---
 
-## Current limitations
+## Current Limitations
 
-- staged changes only
-- clean worktree required
-- no binary files
-- no missing-newline file markers
-- no partial line splitting inside a hunk
+- Staged changes only (all changes must be staged)
+- Clean worktree required (no unstaged or untracked files)
+- No binary file support
+- No missing-newline file markers
+- No partial line splitting inside a hunk
