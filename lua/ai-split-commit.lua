@@ -10,6 +10,7 @@ M.config = {
   grouping_prompt_template = nil,
   grouping_system_prompt = nil,
   default_view_mode = "split", -- "split" or "group_diff"
+  use_delta = true, -- use delta (https://github.com/dandavison/delta) for rich diff rendering
 }
 
 M._active_session = nil

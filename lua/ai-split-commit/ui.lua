@@ -2,6 +2,8 @@ local M = {}
 
 local utils = require "ai-split-commit.utils"
 
+local setup_diff_keymaps -- forward declaration, defined in Keymaps section
+
 ---------------------------------------------------------------------------
 -- Buffer / window helpers
 ---------------------------------------------------------------------------
@@ -362,6 +364,109 @@ local function render_items(session)
   end
 end
 
+local function render_diff_plain(session, text)
+  if session.ui.diff_is_term then
+    local old_buf = session.ui.diff_buf
+    local new_buf = vim.api.nvim_create_buf(false, true)
+    init_buf(new_buf, "diff", false)
+
+    if win_valid(session.ui.diff_win) then
+      vim.api.nvim_win_set_buf(session.ui.diff_win, new_buf)
+      configure_win(session.ui.diff_win)
+    end
+
+    setup_diff_keymaps(session, new_buf)
+    session.ui.diff_buf = new_buf
+    session.ui.diff_is_term = false
+
+    if buf_valid(old_buf) then
+      pcall(vim.api.nvim_buf_delete, old_buf, { force = true })
+    end
+  end
+
+  local lines = utils.split_lines(text)
+  set_buf_lines(session.ui.diff_buf, #lines > 0 and lines or { "(no diff)" }, false)
+end
+
+local function render_diff_with_delta(session, text)
+  if session.ui.delta_job then
+    pcall(vim.fn.jobstop, session.ui.delta_job)
+    session.ui.delta_job = nil
+  end
+
+  session.ui.diff_render_id = (session.ui.diff_render_id or 0) + 1
+  local render_id = session.ui.diff_render_id
+
+  local old_buf = session.ui.diff_buf
+  local new_buf = vim.api.nvim_create_buf(false, true)
+  vim.bo[new_buf].bufhidden = "wipe"
+
+  local chan = vim.api.nvim_open_term(new_buf, {})
+
+  if win_valid(session.ui.diff_win) then
+    vim.api.nvim_win_set_buf(session.ui.diff_win, new_buf)
+    configure_win(session.ui.diff_win)
+  end
+
+  setup_diff_keymaps(session, new_buf)
+  session.ui.diff_buf = new_buf
+  session.ui.diff_is_term = true
+
+  if old_buf and old_buf ~= new_buf and buf_valid(old_buf) then
+    pcall(vim.api.nvim_buf_delete, old_buf, { force = true })
+  end
+
+  update_winbars(session)
+
+  local width = win_valid(session.ui.diff_win)
+      and vim.api.nvim_win_get_width(session.ui.diff_win)
+    or 80
+
+  local job = vim.fn.jobstart({ "delta", "--width=" .. tostring(width), "--paging=never" }, {
+    stdout_buffered = true,
+    on_stdout = function(_, data)
+      vim.schedule(function()
+        if not session.ui or session.ui.diff_render_id ~= render_id then
+          return
+        end
+        if not buf_valid(new_buf) then
+          return
+        end
+
+        for i, line in ipairs(data) do
+          if line ~= "" or i < #data then
+            pcall(vim.api.nvim_chan_send, chan, line .. "\r\n")
+          end
+        end
+
+        if win_valid(session.ui.diff_win) then
+          pcall(vim.api.nvim_win_set_cursor, session.ui.diff_win, { 1, 0 })
+        end
+      end)
+    end,
+    on_exit = function(j)
+      vim.schedule(function()
+        if session.ui and session.ui.delta_job == j then
+          session.ui.delta_job = nil
+        end
+      end)
+    end,
+  })
+
+  if job <= 0 then
+    render_diff_plain(session, text)
+    return
+  end
+
+  session.ui.delta_job = job
+  vim.fn.chansend(job, text)
+  vim.fn.chanclose(job, "stdin")
+end
+
+local function use_delta()
+  return require("ai-split-commit").config.use_delta ~= false and vim.fn.executable("delta") == 1
+end
+
 local function render_diff(session)
   local diff_mod = require "ai-split-commit.diff"
   local group = current_group(session)
@@ -377,8 +482,11 @@ local function render_diff(session)
     end
   end
 
-  local lines = utils.split_lines(text)
-  set_buf_lines(session.ui.diff_buf, #lines > 0 and lines or { "(no diff)" }, false)
+  if use_delta() and text ~= "" then
+    render_diff_with_delta(session, text)
+  else
+    render_diff_plain(session, text)
+  end
 end
 
 local function render_message(session)
@@ -846,6 +954,23 @@ end
 -- Keymaps
 ---------------------------------------------------------------------------
 
+local function setup_shared_keymaps(session, buf)
+  map_buf(buf, "q", function() action_close(session) end, "Close")
+  map_buf(buf, "P", function() action_preview_all(session) end, "Preview all")
+  map_buf(buf, "gv", function() action_toggle_view_mode(session) end, "Toggle view mode")
+  map_buf(buf, "gs", function() action_stage_group(session) end, "Stage group")
+  map_buf(buf, "gc", function() action_generate_commit(session) end, "Generate commit message")
+  map_buf(buf, "ga", function() action_generate_all_commit_messages(session) end, "Generate messages for all groups")
+  map_buf(buf, "cc", function() action_commit_saved_groups(session, true) end, "Commit current group")
+  map_buf(buf, "ca", function() action_commit_saved_groups(session, false) end, "Commit all groups with messages")
+  map_buf(buf, "<Tab>", function() vim.cmd "wincmd w" end, "Next pane")
+end
+
+setup_diff_keymaps = function(session, buf)
+  setup_shared_keymaps(session, buf)
+  map_buf(buf, "<CR>", function() focus(session.ui.message_win) end, "Focus message")
+end
+
 local function setup_keymaps(session)
   local bufs = {
     session.ui.groups_buf,
@@ -855,15 +980,7 @@ local function setup_keymaps(session)
   }
 
   for _, buf in ipairs(bufs) do
-    map_buf(buf, "q", function() action_close(session) end, "Close")
-    map_buf(buf, "P", function() action_preview_all(session) end, "Preview all")
-    map_buf(buf, "gv", function() action_toggle_view_mode(session) end, "Toggle view mode")
-    map_buf(buf, "gs", function() action_stage_group(session) end, "Stage group")
-    map_buf(buf, "gc", function() action_generate_commit(session) end, "Generate commit message")
-    map_buf(buf, "ga", function() action_generate_all_commit_messages(session) end, "Generate messages for all groups")
-    map_buf(buf, "cc", function() action_commit_saved_groups(session, true) end, "Commit current group")
-    map_buf(buf, "ca", function() action_commit_saved_groups(session, false) end, "Commit all groups with messages")
-    map_buf(buf, "<Tab>", function() vim.cmd "wincmd w" end, "Next pane")
+    setup_shared_keymaps(session, buf)
   end
 
   local gb = session.ui.groups_buf
@@ -961,6 +1078,9 @@ function M.open(session)
     rendering = false,
     skip_save = false,
     view_mode = normalize_view_mode(require("ai-split-commit").config.default_view_mode),
+    delta_job = nil,
+    diff_render_id = 0,
+    diff_is_term = false,
   }
 
   init_buf(session.ui.groups_buf, "aisplitcommit", false)
@@ -1010,6 +1130,11 @@ function M.close(session)
 
   if session.ui.augroup then
     pcall(vim.api.nvim_del_augroup_by_id, session.ui.augroup)
+  end
+
+  if session.ui.delta_job then
+    pcall(vim.fn.jobstop, session.ui.delta_job)
+    session.ui.delta_job = nil
   end
 
   local tab = session.ui.tab
