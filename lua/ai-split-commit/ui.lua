@@ -63,6 +63,37 @@ local function map_buf(buf, lhs, fn, desc)
   vim.keymap.set("n", lhs, fn, { buffer = buf, silent = true, desc = desc })
 end
 
+local function find_key_for_action(resolved, action_name)
+  for lhs, commands in pairs(resolved or {}) do
+    if type(commands) == "table" then
+      for _, cmd in ipairs(commands) do
+        if cmd == action_name then
+          return lhs
+        end
+      end
+    end
+  end
+  return nil
+end
+
+local function key_hint(resolved, action, label)
+  local key = find_key_for_action(resolved, action)
+  if not key then
+    return nil
+  end
+  return label and (key .. " " .. label) or key
+end
+
+local function join_hints(hints, sep)
+  local filtered = {}
+  for _, v in ipairs(hints) do
+    if v then
+      table.insert(filtered, v)
+    end
+  end
+  return table.concat(filtered, sep or " ")
+end
+
 local function normalize_view_mode(mode)
   return mode == "group_diff" and "group_diff" or "split"
 end
@@ -100,26 +131,74 @@ local function focus_role(session, role)
 end
 
 local function update_winbars(session)
+  local resolved = session.ui.resolved_keymaps or {}
   local view_label = session.ui.view_mode == "group_diff" and "group diff" or "split"
 
   pcall(function()
-    vim.wo[session.ui.groups_win].winbar = " Groups  [gv " .. view_label .. " | a e M dd J/K R gc ga cc ca gs q]"
+    local up = find_key_for_action(resolved, "move_group_up")
+    local down = find_key_for_action(resolved, "move_group_down")
+    local reorder_hint = (up and down) and (down .. "/" .. up) or nil
+
+    local view_hint = key_hint(resolved, "toggle_view", view_label)
+    local action_hints = join_hints({
+      key_hint(resolved, "add_group"),
+      key_hint(resolved, "rename_group"),
+      key_hint(resolved, "merge_group"),
+      key_hint(resolved, "delete_group"),
+      reorder_hint,
+      key_hint(resolved, "regroup_all"),
+      key_hint(resolved, "generate_commit"),
+      key_hint(resolved, "generate_all_commits"),
+      key_hint(resolved, "commit_current"),
+      key_hint(resolved, "commit_all"),
+      key_hint(resolved, "stage_group"),
+      key_hint(resolved, "close"),
+    })
+
+    local bar_parts = {}
+    if view_hint then
+      table.insert(bar_parts, view_hint)
+    end
+    if action_hints ~= "" then
+      table.insert(bar_parts, action_hints)
+    end
+
+    vim.wo[session.ui.groups_win].winbar = " Groups  [" .. table.concat(bar_parts, " | ") .. "]"
   end)
 
   if win_valid(session.ui.items_win) then
     pcall(function()
-      vim.wo[session.ui.items_win].winbar = " Changes  [m n x]"
+      local hints = join_hints({
+        key_hint(resolved, "move_item"),
+        key_hint(resolved, "move_item_new"),
+        key_hint(resolved, "unassign_item"),
+      })
+      vim.wo[session.ui.items_win].winbar = " Changes  [" .. hints .. "]"
     end)
   end
 
   pcall(function()
-    local title = session.ui.view_mode == "group_diff" and " Group Diff  [gv split | <CR> message]"
-      or " Diff Preview  [gv group | <CR> message]"
-    vim.wo[session.ui.diff_win].winbar = title
+    local alt_view = session.ui.view_mode == "group_diff" and "split" or "group"
+    local title = session.ui.view_mode == "group_diff" and " Group Diff" or " Diff Preview"
+    local hints = join_hints({
+      key_hint(resolved, "toggle_view", alt_view),
+      key_hint(resolved, "confirm", "message"),
+    }, " | ")
+    vim.wo[session.ui.diff_win].winbar = title .. "  [" .. hints .. "]"
   end)
 
   pcall(function()
-    vim.wo[session.ui.message_win].winbar = " Commit Message  [edit manually or use gc / ga]"
+    local parts = {}
+    local gc_key = find_key_for_action(resolved, "generate_commit")
+    local ga_key = find_key_for_action(resolved, "generate_all_commits")
+    if gc_key then
+      table.insert(parts, gc_key)
+    end
+    if ga_key then
+      table.insert(parts, ga_key)
+    end
+    local suffix = #parts > 0 and (" or use " .. table.concat(parts, " / ")) or ""
+    vim.wo[session.ui.message_win].winbar = " Commit Message  [edit manually" .. suffix .. "]"
   end)
 end
 
@@ -147,6 +226,8 @@ local function apply_layout(session)
 
   if win_valid(session.ui.groups_win) then
     vim.api.nvim_win_set_width(session.ui.groups_win, 34)
+    vim.wo[session.ui.groups_win].wrap = true
+    vim.wo[session.ui.groups_win].linebreak = true
   end
 
   if win_valid(session.ui.items_win) then
@@ -500,10 +581,13 @@ local function render_message(session)
     lines = utils.split_lines(message)
 
     if #lines == 0 then
+      local resolved = session.ui.resolved_keymaps or {}
+      local gc_key = find_key_for_action(resolved, "generate_commit") or "gc"
+      local ga_key = find_key_for_action(resolved, "generate_all_commits") or "ga"
       lines = {
         "# No commit message saved for this group.",
-        "# Press gc to generate suggestions for the selected group.",
-        "# Press ga to auto-generate one message for all groups.",
+        "# Press " .. gc_key .. " to generate suggestions for the selected group.",
+        "# Press " .. ga_key .. " to auto-generate one message for all groups.",
         "# Or type a commit message here manually.",
       }
     end
@@ -954,24 +1038,232 @@ end
 -- Keymaps
 ---------------------------------------------------------------------------
 
-local function setup_shared_keymaps(session, buf)
-  map_buf(buf, "q", function() action_close(session) end, "Close")
-  map_buf(buf, "P", function() action_preview_all(session) end, "Preview all")
-  map_buf(buf, "gv", function() action_toggle_view_mode(session) end, "Toggle view mode")
-  map_buf(buf, "gs", function() action_stage_group(session) end, "Stage group")
-  map_buf(buf, "gc", function() action_generate_commit(session) end, "Generate commit message")
-  map_buf(buf, "ga", function() action_generate_all_commit_messages(session) end, "Generate messages for all groups")
-  map_buf(buf, "cc", function() action_commit_saved_groups(session, true) end, "Commit current group")
-  map_buf(buf, "ca", function() action_commit_saved_groups(session, false) end, "Commit all groups with messages")
-  map_buf(buf, "<Tab>", function() vim.cmd "wincmd w" end, "Next pane")
+--- @alias AISplitCommitAction
+--- | 'fallback' Run the built-in key behaviour
+--- | 'close' Close session
+--- | 'preview_all' Preview all groups in a new tab
+--- | 'toggle_view' Toggle split / group_diff view
+--- | 'stage_group' Stage current group
+--- | 'generate_commit' Generate commit message for current group
+--- | 'generate_all_commits' Auto-generate one message per group
+--- | 'commit_current' Commit current group
+--- | 'commit_all' Commit all groups with messages
+--- | 'next_pane' Cycle panes
+--- | 'confirm' Context-dependent: focus next pane
+--- | 'add_group' Add a new group (groups pane)
+--- | 'rename_group' Rename group (groups pane)
+--- | 'merge_group' Merge group (groups pane)
+--- | 'delete_group' Delete group (groups pane)
+--- | 'move_group_down' Reorder group down (groups pane)
+--- | 'move_group_up' Reorder group up (groups pane)
+--- | 'regroup_all' Re-run AI grouping (groups pane)
+--- | 'move_item' Move item to another group (items pane)
+--- | 'move_item_new' Move item to a new group (items pane)
+--- | 'unassign_item' Unassign item (items pane)
+--- | fun(session: table, role: string): boolean? Custom function
+
+local PRESETS = {
+  default = {
+    ["q"] = { "close" },
+    ["P"] = { "preview_all" },
+    ["gv"] = { "toggle_view" },
+    ["gs"] = { "stage_group" },
+    ["gc"] = { "generate_commit" },
+    ["ga"] = { "generate_all_commits" },
+    ["cc"] = { "commit_current" },
+    ["ca"] = { "commit_all" },
+    ["<Tab>"] = { "next_pane" },
+    ["<CR>"] = { "confirm", "fallback" },
+    ["a"] = { "add_group", "fallback" },
+    ["e"] = { "rename_group", "fallback" },
+    ["M"] = { "merge_group", "fallback" },
+    ["dd"] = { "delete_group", "fallback" },
+    ["J"] = { "move_group_down", "fallback" },
+    ["K"] = { "move_group_up", "fallback" },
+    ["R"] = { "regroup_all", "fallback" },
+    ["m"] = { "move_item", "fallback" },
+    ["n"] = { "move_item_new", "fallback" },
+    ["x"] = { "unassign_item", "fallback" },
+  },
+  none = {},
+}
+
+local function resolve_keymaps()
+  local cfg = require("ai-split-commit").config.keymaps or {}
+  local preset_name = cfg.preset or "default"
+  local preset = PRESETS[preset_name] or {}
+  local result = vim.deepcopy(preset)
+
+  for key, commands in pairs(cfg) do
+    if key ~= "preset" then
+      if not commands or (type(commands) == "table" and #commands == 0) then
+        result[key] = nil
+      else
+        result[key] = commands
+      end
+    end
+  end
+
+  return result
+end
+
+local function build_action_handlers(session)
+  return {
+    -- shared (all panes)
+    close = function()
+      action_close(session)
+    end,
+    preview_all = function()
+      action_preview_all(session)
+    end,
+    toggle_view = function()
+      action_toggle_view_mode(session)
+    end,
+    stage_group = function()
+      action_stage_group(session)
+    end,
+    generate_commit = function()
+      action_generate_commit(session)
+    end,
+    generate_all_commits = function()
+      action_generate_all_commit_messages(session)
+    end,
+    commit_current = function()
+      action_commit_saved_groups(session, true)
+    end,
+    commit_all = function()
+      action_commit_saved_groups(session, false)
+    end,
+    next_pane = function()
+      vim.cmd "wincmd w"
+    end,
+
+    -- context-dependent
+    confirm = function(role)
+      if role == "groups" then
+        if session.ui.view_mode == "group_diff" then
+          focus(session.ui.diff_win)
+        else
+          focus(session.ui.items_win)
+        end
+      elseif role == "items" then
+        focus(session.ui.diff_win)
+      elseif role == "diff" then
+        focus(session.ui.message_win)
+      else
+        return false
+      end
+    end,
+
+    -- groups pane
+    add_group = function(role)
+      if role ~= "groups" then
+        return false
+      end
+      action_add_group(session)
+    end,
+    rename_group = function(role)
+      if role ~= "groups" then
+        return false
+      end
+      action_rename_group(session)
+    end,
+    merge_group = function(role)
+      if role ~= "groups" then
+        return false
+      end
+      action_merge_group(session)
+    end,
+    delete_group = function(role)
+      if role ~= "groups" then
+        return false
+      end
+      action_delete_group(session)
+    end,
+    move_group_down = function(role)
+      if role ~= "groups" then
+        return false
+      end
+      action_reorder(session, "down")
+    end,
+    move_group_up = function(role)
+      if role ~= "groups" then
+        return false
+      end
+      action_reorder(session, "up")
+    end,
+    regroup_all = function(role)
+      if role ~= "groups" then
+        return false
+      end
+      action_regroup_all(session)
+    end,
+
+    -- items pane
+    move_item = function(role)
+      if role ~= "items" then
+        return false
+      end
+      action_move_item(session)
+    end,
+    move_item_new = function(role)
+      if role ~= "items" then
+        return false
+      end
+      action_move_item_new(session)
+    end,
+    unassign_item = function(role)
+      if role ~= "items" then
+        return false
+      end
+      action_unassign_item(session)
+    end,
+  }
+end
+
+local function create_keymap_handler(session, lhs, commands, handlers)
+  return function()
+    local role = current_focus_role(session)
+
+    for _, cmd in ipairs(commands) do
+      if cmd == "fallback" then
+        local keys = vim.api.nvim_replace_termcodes(lhs, true, true, true)
+        vim.api.nvim_feedkeys(keys, "n", false)
+        return
+      elseif type(cmd) == "function" then
+        if cmd(session, role) then
+          return
+        end
+      else
+        local handler = handlers[cmd]
+        if handler and handler(role) ~= false then
+          return
+        end
+      end
+    end
+  end
+end
+
+local function setup_buf_keymaps(session, buf, resolved, handlers)
+  for lhs, commands in pairs(resolved) do
+    if type(commands) == "table" and #commands > 0 then
+      local handler = create_keymap_handler(session, lhs, commands, handlers)
+      map_buf(buf, lhs, handler, "AISplitCommit")
+    end
+  end
 end
 
 setup_diff_keymaps = function(session, buf)
-  setup_shared_keymaps(session, buf)
-  map_buf(buf, "<CR>", function() focus(session.ui.message_win) end, "Focus message")
+  local resolved = session.ui.resolved_keymaps or resolve_keymaps()
+  local handlers = build_action_handlers(session)
+  setup_buf_keymaps(session, buf, resolved, handlers)
 end
 
 local function setup_keymaps(session)
+  local resolved = resolve_keymaps()
+  session.ui.resolved_keymaps = resolved
+  local handlers = build_action_handlers(session)
+
   local bufs = {
     session.ui.groups_buf,
     session.ui.items_buf,
@@ -980,32 +1272,8 @@ local function setup_keymaps(session)
   }
 
   for _, buf in ipairs(bufs) do
-    setup_shared_keymaps(session, buf)
+    setup_buf_keymaps(session, buf, resolved, handlers)
   end
-
-  local gb = session.ui.groups_buf
-  map_buf(gb, "a", function() action_add_group(session) end, "Add group")
-  map_buf(gb, "e", function() action_rename_group(session) end, "Rename group")
-  map_buf(gb, "M", function() action_merge_group(session) end, "Merge group")
-  map_buf(gb, "dd", function() action_delete_group(session) end, "Delete group")
-  map_buf(gb, "J", function() action_reorder(session, "down") end, "Move down")
-  map_buf(gb, "K", function() action_reorder(session, "up") end, "Move up")
-  map_buf(gb, "R", function() action_regroup_all(session) end, "Regroup all")
-  map_buf(gb, "<CR>", function()
-    if session.ui.view_mode == "group_diff" then
-      focus(session.ui.diff_win)
-    else
-      focus(session.ui.items_win)
-    end
-  end, "Focus next pane")
-
-  local ib = session.ui.items_buf
-  map_buf(ib, "m", function() action_move_item(session) end, "Move item")
-  map_buf(ib, "n", function() action_move_item_new(session) end, "Move to new group")
-  map_buf(ib, "x", function() action_unassign_item(session) end, "Unassign item")
-  map_buf(ib, "<CR>", function() focus(session.ui.diff_win) end, "Focus diff")
-
-  map_buf(session.ui.diff_buf, "<CR>", function() focus(session.ui.message_win) end, "Focus message")
 end
 
 ---------------------------------------------------------------------------
@@ -1115,8 +1383,8 @@ function M.open(session)
   configure_win(session.ui.diff_win)
   configure_win(session.ui.message_win)
 
-  apply_layout(session)
   setup_keymaps(session)
+  apply_layout(session)
   setup_autocmds(session)
   render_all(session)
   focus(session.ui.groups_win)

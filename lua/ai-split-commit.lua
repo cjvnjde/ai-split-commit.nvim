@@ -11,6 +11,9 @@ M.config = {
   grouping_system_prompt = nil,
   default_view_mode = "split", -- "split" or "group_diff"
   use_delta = true, -- use delta (https://github.com/dandavison/delta) for rich diff rendering
+  keymaps = {
+    preset = "default",
+  },
 }
 
 M._active_session = nil
