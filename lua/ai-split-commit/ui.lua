@@ -951,7 +951,9 @@ local function action_generate_all_commit_messages(session)
   local function step()
     if index > #groups then
       session.busy = false
-      session.ui.generating = nil
+      if session.ui then
+        session.ui.generating = nil
+      end
 
       if M.is_alive(session) then
         render_all(session)
@@ -990,7 +992,9 @@ local function action_generate_all_commit_messages(session)
       vim.schedule(function()
         if not M.is_alive(session) then
           session.busy = false
-          session.ui.generating = nil
+          if session.ui then
+            session.ui.generating = nil
+          end
           return
         end
 
