@@ -259,6 +259,7 @@ local HL_LOW = "AISplitCritLow"
 local HL_UNASSIGNED = "AISplitUnassigned"
 local HL_STALE = "AISplitStale"
 local HL_HAS_MESSAGE = "AISplitHasMessage"
+local HL_GENERATING = "AISplitGenerating"
 
 local function setup_highlights()
   local function def(name, opts)
@@ -273,6 +274,7 @@ local function setup_highlights()
   def(HL_UNASSIGNED, { fg = "#6c7086", italic = true })
   def(HL_STALE, { fg = "#fab387", italic = true })
   def(HL_HAS_MESSAGE, { fg = "#89dceb", bold = true })
+  def(HL_GENERATING, { fg = "#cba6f7", bold = true, italic = true })
 end
 
 local CRIT_ICON = { high = "▲", medium = "●", low = "▽" }
@@ -368,15 +370,20 @@ local function render_groups(session)
     else
       local icon = CRIT_ICON[group.criticality] or "●"
       local status = ""
+      local is_generating = session.ui.generating and session.ui.generating.current_group_id == group.id
 
-      if S.has_commit_message(group) then
+      if is_generating then
+        local gen = session.ui.generating
+        status = string.format("[gen %d/%d]", gen.current, gen.total)
+      elseif S.has_commit_message(group) then
         status = group.stale and "[msg*]" or "[msg]"
       elseif group.stale then
         status = "[*]"
       end
 
       line = string.format("%s%s %s %s  %df %di", cursor, icon, title, status, files, #group.item_ids)
-      hl = group.stale and HL_STALE or (CRIT_HL[group.criticality] or HL_MEDIUM)
+      hl = is_generating and HL_GENERATING
+        or (group.stale and HL_STALE or (CRIT_HL[group.criticality] or HL_MEDIUM))
     end
 
     table.insert(lines, line)
@@ -577,22 +584,34 @@ local function render_message(session)
   local modifiable = false
 
   if group and group.kind == "normal" then
-    local message = S.get_commit_message(group)
-    lines = utils.split_lines(message)
+    local is_generating = session.ui.generating and session.ui.generating.current_group_id == group.id
 
-    if #lines == 0 then
-      local resolved = session.ui.resolved_keymaps or {}
-      local gc_key = find_key_for_action(resolved, "generate_commit") or "gc"
-      local ga_key = find_key_for_action(resolved, "generate_all_commits") or "ga"
+    if is_generating then
+      local gen = session.ui.generating
+      local cfg = require("ai-split-commit").config
       lines = {
-        "# No commit message saved for this group.",
-        "# Press " .. gc_key .. " to generate suggestions for the selected group.",
-        "# Press " .. ga_key .. " to auto-generate one message for all groups.",
-        "# Or type a commit message here manually.",
+        "# Generating commit message [" .. gen.current .. "/" .. gen.total .. "]...",
+        "# Group: " .. S.get_group_title(group),
+        "# Provider: " .. cfg.provider .. " / " .. cfg.model,
       }
-    end
+    else
+      local message = S.get_commit_message(group)
+      lines = utils.split_lines(message)
 
-    modifiable = true
+      if #lines == 0 then
+        local resolved = session.ui.resolved_keymaps or {}
+        local gc_key = find_key_for_action(resolved, "generate_commit") or "gc"
+        local ga_key = find_key_for_action(resolved, "generate_all_commits") or "ga"
+        lines = {
+          "# No commit message saved for this group.",
+          "# Press " .. gc_key .. " to generate suggestions for the selected group.",
+          "# Press " .. ga_key .. " to auto-generate one message for all groups.",
+          "# Or type a commit message here manually.",
+        }
+      end
+
+      modifiable = true
+    end
   else
     lines = {
       "# Unassigned changes cannot have a commit message.",
@@ -854,6 +873,15 @@ local function action_generate_commit(session)
   end
 
   session.busy = true
+  session.ui.generating = { total = 1, current = 1, current_group_id = group.id }
+  render_groups(session)
+  render_message(session)
+
+  local cfg = require("ai-split-commit").config
+  vim.notify(
+    string.format('Generating commit for "%s" [%s / %s]', S.get_group_title(group), cfg.provider, cfg.model),
+    vim.log.levels.INFO
+  )
 
   local diff_text = require("ai-split-commit.diff").build_group_diff(session, group.id)
   ai_commit.generate_commit_for_diff(diff_text, {
@@ -861,6 +889,11 @@ local function action_generate_commit(session)
     on_result = function(_, err)
       vim.schedule(function()
         session.busy = false
+        if M.is_alive(session) then
+          session.ui.generating = nil
+          render_groups(session)
+          render_message(session)
+        end
         if err then
           vim.notify("Failed to generate commit messages: " .. err, vim.log.levels.ERROR)
         end
@@ -904,13 +937,21 @@ local function action_generate_all_commit_messages(session)
   end
 
   session.busy = true
+  local total = #groups
   local index = 1
   local generated = 0
   local failed = 0
 
+  local cfg = require("ai-split-commit").config
+  vim.notify(
+    string.format("Generating commit messages for %d group(s) [%s / %s]", total, cfg.provider, cfg.model),
+    vim.log.levels.INFO
+  )
+
   local function step()
     if index > #groups then
       session.busy = false
+      session.ui.generating = nil
 
       if M.is_alive(session) then
         render_all(session)
@@ -924,6 +965,21 @@ local function action_generate_all_commit_messages(session)
     end
 
     local group = groups[index]
+
+    session.ui.generating = { total = total, current = index, current_group_id = group.id }
+
+    vim.notify(
+      string.format('Generating commit [%d/%d]: "%s"', index, total, S.get_group_title(group)),
+      vim.log.levels.INFO
+    )
+
+    if M.is_alive(session) then
+      render_groups(session)
+      if session.current_group_id == group.id then
+        render_message(session)
+      end
+    end
+
     local diff_text = require("ai-split-commit.diff").build_group_diff(session, group.id)
 
     ai_commit.generate_commit_messages_for_diff(diff_text, {
@@ -934,6 +990,7 @@ local function action_generate_all_commit_messages(session)
       vim.schedule(function()
         if not M.is_alive(session) then
           session.busy = false
+          session.ui.generating = nil
           return
         end
 
