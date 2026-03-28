@@ -97,7 +97,7 @@ local function build_groups_from_ai(session, ai_result, preserved)
     end
   end
 
-  if #session.groups == 0 then
+  if #session.groups == 0 and not (ai_result and ai_result.preserve_unassigned) then
     local all = vim.deepcopy(session.repo.item_order)
 
     table.insert(session.groups, make_group(session, {

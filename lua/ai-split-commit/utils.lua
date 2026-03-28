@@ -67,4 +67,20 @@ function M.to_set(list)
   return set
 end
 
+function M.is_path_ignored(path, patterns)
+  for _, pattern in ipairs(patterns or {}) do
+    if path == pattern then
+      return true
+    end
+
+    local regpat = vim.fn.glob2regpat(pattern)
+
+    if path:match(regpat) then
+      return true
+    end
+  end
+
+  return false
+end
+
 return M

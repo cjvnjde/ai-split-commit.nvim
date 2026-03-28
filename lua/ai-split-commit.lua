@@ -6,6 +6,7 @@ M.config = {
   max_tokens = 4096,
   max_item_diff_length = 1200,
   max_group_count = 8,
+  ignored_files = {},
   debug = false,
   grouping_prompt_template = nil,
   grouping_system_prompt = nil,

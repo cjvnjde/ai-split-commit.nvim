@@ -1,5 +1,7 @@
 local M = {}
 
+local utils = require "ai-split-commit.utils"
+
 ---------------------------------------------------------------------------
 -- Prompt
 ---------------------------------------------------------------------------
@@ -137,13 +139,13 @@ local function request_chat(config, prompt, system_prompt, label, callback)
   end)
 end
 
-local function fallback_groups(repo)
+local function fallback_groups(repo, item_ids)
   return {
     groups = {
       {
         title = "All staged changes",
         criticality = "medium",
-        item_ids = vim.deepcopy(repo.item_order),
+        item_ids = vim.deepcopy(item_ids or repo.item_order),
       },
     },
   }
@@ -164,16 +166,28 @@ function M.group_items(config, repo, extra_prompt, callback)
   local diff_mod = require "ai-split-commit.diff"
   local fake_session = { repo = repo }
   local parts = {}
+  local prompt_item_ids = {}
 
   for _, item_id in ipairs(repo.item_order) do
     local item = repo.items_by_id[item_id]
-    local patch = diff_mod.build_item_diff(fake_session, item_id)
+    local patch = diff_mod.build_item_diff(fake_session, item_id, {
+      binary_mode = "summary",
+      ignored_files = config.ignored_files,
+    })
 
-    if config.max_item_diff_length and #patch > config.max_item_diff_length then
-      patch = patch:sub(1, config.max_item_diff_length) .. "\n... (truncated)"
+    if patch and utils.trim(patch) ~= "" then
+      table.insert(prompt_item_ids, item_id)
+
+      if config.max_item_diff_length and #patch > config.max_item_diff_length then
+        patch = patch:sub(1, config.max_item_diff_length) .. "\n... (truncated)"
+      end
+
+      table.insert(parts, string.format("[%s] %s\n%s", item_id, item.path, patch))
     end
+  end
 
-    table.insert(parts, string.format("[%s] %s\n%s", item_id, item.path, patch))
+  if #prompt_item_ids == 0 then
+    return callback({ groups = {}, preserve_unassigned = true })
   end
 
   local prompt = fill_template(config.grouping_prompt_template or GROUPING_PROMPT, {
@@ -185,19 +199,19 @@ function M.group_items(config, repo, extra_prompt, callback)
 
   request_chat(config, prompt, config.grouping_system_prompt or GROUPING_SYSTEM, "AISplitCommit[grouping]", function(text, err)
     if err then
-      return callback(fallback_groups(repo), err)
+      return callback(fallback_groups(repo, prompt_item_ids), err)
     end
 
     local json_text = extract_json(text or "")
 
     if not json_text then
-      return callback(fallback_groups(repo), "AI did not return JSON")
+      return callback(fallback_groups(repo, prompt_item_ids), "AI did not return JSON")
     end
 
     local ok, data = pcall(vim.json.decode, json_text)
 
     if not ok or type(data) ~= "table" or type(data.groups) ~= "table" then
-      return callback(fallback_groups(repo), "Failed to parse AI JSON")
+      return callback(fallback_groups(repo, prompt_item_ids), "Failed to parse AI JSON")
     end
 
     local result = { groups = {} }
@@ -223,7 +237,7 @@ function M.group_items(config, repo, extra_prompt, callback)
     end
 
     if #result.groups == 0 then
-      return callback(fallback_groups(repo), "AI returned no usable groups")
+      return callback(fallback_groups(repo, prompt_item_ids), "AI returned no usable groups")
     end
 
     callback(result)

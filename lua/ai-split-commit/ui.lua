@@ -567,11 +567,11 @@ local function render_diff(session)
 
   if group then
     if session.ui.view_mode == "group_diff" then
-      text = diff_mod.build_group_diff(session, group.id)
+      text = diff_mod.build_group_diff(session, group.id, { binary_mode = "omit" })
     elseif session.current_item_id and session.repo.items_by_id[session.current_item_id] then
-      text = diff_mod.build_item_diff(session, session.current_item_id)
+      text = diff_mod.build_item_diff(session, session.current_item_id, { binary_mode = "omit" })
     else
-      text = diff_mod.build_group_diff(session, group.id)
+      text = diff_mod.build_group_diff(session, group.id, { binary_mode = "omit" })
     end
   end
 
@@ -933,7 +933,20 @@ local function action_generate_commit(session)
     vim.log.levels.INFO
   )
 
-  local diff_text = require("ai-split-commit.diff").build_group_diff(session, group.id)
+  local diff_text = require("ai-split-commit.diff").build_group_diff(session, group.id, {
+    binary_mode = "summary",
+    ignored_files = cfg.ignored_files,
+  })
+
+  if utils.trim(diff_text) == "" then
+    session.busy = false
+    session.ui.generating = nil
+    render_groups(session)
+    render_message(session)
+    vim.notify("This group only contains ignored files or no diffable changes for AI.", vim.log.levels.WARN)
+    return
+  end
+
   ai_commit.generate_commit_for_diff(diff_text, {
     extra_prompt = build_commit_extra_prompt(session, group),
     on_result = function(_, err)
@@ -1033,7 +1046,31 @@ local function action_generate_all_commit_messages(session)
       end
     end
 
-    local diff_text = require("ai-split-commit.diff").build_group_diff(session, group.id)
+    local diff_text = require("ai-split-commit.diff").build_group_diff(session, group.id, {
+      binary_mode = "summary",
+      ignored_files = cfg.ignored_files,
+    })
+
+    if utils.trim(diff_text) == "" then
+      failed = failed + 1
+      session.ui.generating = nil
+
+      if M.is_alive(session) then
+        render_groups(session)
+        if session.current_group_id == group.id then
+          render_message(session)
+        end
+      end
+
+      vim.notify(
+        'Skipped commit generation for "' .. S.get_group_title(group) .. '": only ignored files or no diffable changes for AI.',
+        vim.log.levels.WARN
+      )
+
+      index = index + 1
+      step()
+      return
+    end
 
     ai_commit.generate_commit_messages_for_diff(diff_text, {
       extra_prompt = build_commit_extra_prompt(session, group, {

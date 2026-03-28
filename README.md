@@ -19,6 +19,7 @@ It is not just a commit tool — it is primarily a **change-inspection workflow*
 - Batch-generate one commit message per group automatically
 - Commit one group or all prepared groups at once
 - Stage one group for manual commit
+- Binary-safe handling: binary file content is omitted from preview and AI input, while staging/committing still works
 - [delta](https://github.com/dandavison/delta) support for rich diff rendering
 - Blink.nvim-style keymap customization
 - Backup ref created before multi-group commits
@@ -72,6 +73,7 @@ require("ai-split-commit").setup(opts)
 | `max_tokens` | `number` | `4096` | Maximum output tokens for the AI response. |
 | `max_item_diff_length` | `number` | `1200` | Per-item diff truncation (in characters) before sending to AI for grouping. Longer hunks are truncated with `... (truncated)`. This controls how much context the AI sees per hunk. |
 | `max_group_count` | `number` | `8` | Soft cap for the number of groups the AI proposes. The AI is instructed to prefer 1 to this many groups. |
+| `ignored_files` | `string[]` | `{}` | List of file paths or glob patterns to omit from AI grouping and AI commit-message generation. Matching files remain visible in the review UI and can still be staged/committed manually. |
 | `debug` | `boolean` | `false` | Save grouping prompts to `~/.cache/nvim/ai-split-commit-debug/` for inspection. |
 | `grouping_prompt_template` | `string?` | `nil` | Custom user prompt for the grouping request. When `nil`, the built-in template is used. See [Prompt Customization](#prompt-customization). |
 | `grouping_system_prompt` | `string?` | `nil` | Custom system prompt for the grouping request. When `nil`, the built-in system prompt is used. |
@@ -417,6 +419,12 @@ Prompts are saved to `~/.cache/nvim/ai-split-commit-debug/`.
     max_tokens = 8192,
     max_item_diff_length = 2000,
     max_group_count = 10,
+    ignored_files = {
+      "package-lock.json",
+      "yarn.lock",
+      "pnpm-lock.yaml",
+      "dist/*",
+    },
     debug = false,
     default_view_mode = "split",
     use_delta = true,
@@ -725,6 +733,6 @@ Sending AI request: AISplitCommit[grouping] -> github-copilot / gpt-5-mini -> ap
 
 - Staged changes only (all changes must be staged)
 - Clean worktree required (no unstaged or untracked files)
-- No binary file support
+- Binary file content is not shown in preview and is not sent to AI; only file metadata/path is used
 - No missing-newline file markers
 - No partial line splitting inside a hunk

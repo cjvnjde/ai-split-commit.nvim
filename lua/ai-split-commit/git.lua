@@ -78,10 +78,6 @@ function M.collect_staged_state(config)
   for _, path in ipairs(parsed.file_order) do
     local file = parsed.files_by_path[path]
 
-    if file.is_binary then
-      return nil, "Binary files not supported yet: " .. path
-    end
-
     if file.has_no_newline_marker then
       return nil, "Missing-newline files not supported yet: " .. path
     end
@@ -113,7 +109,14 @@ local function write_snapshot_to_index(repo_root, path, snapshot, file)
         or nil, "Failed to remove " .. path .. " from index."
   end
 
-  local sha_out, sha_code = run(repo_root, { "hash-object", "-w", "--stdin" }, snapshot.content or "")
+  local tmp = vim.fn.tempname()
+
+  if not utils.write_file(tmp, snapshot.content or "") then
+    return nil, "Failed to write temporary blob for " .. path
+  end
+
+  local sha_out, sha_code = run(repo_root, { "hash-object", "-w", tmp })
+  vim.fn.delete(tmp)
 
   if sha_code ~= 0 then
     return nil, "Failed to write blob for " .. path

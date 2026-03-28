@@ -18,11 +18,48 @@ local function count_selected(file, selected)
   return n
 end
 
-local function build_file_patch(file, selected)
+local function file_change_kind(file)
+  if not file.base_exists and file.final_exists then
+    return "added"
+  end
+
+  if file.base_exists and not file.final_exists then
+    return "deleted"
+  end
+
+  return "changed"
+end
+
+local function build_binary_summary(file)
+  return table.concat({
+    string.format("diff --git a/%s b/%s", file.path, file.path),
+    string.format("Binary file %s: %s (content omitted)", file_change_kind(file), file.path),
+  }, "\n") .. "\n"
+end
+
+local function build_file_patch(file, selected, opts)
+  opts = opts or {}
+
   local n = count_selected(file, selected)
 
   if n == 0 then
     return nil
+  end
+
+  if utils.is_path_ignored(file.path, opts.ignored_files) then
+    return nil
+  end
+
+  if file.is_binary then
+    local binary_mode = opts.binary_mode or "diff"
+
+    if binary_mode == "omit" then
+      return nil
+    end
+
+    if binary_mode == "summary" then
+      return build_binary_summary(file)
+    end
   end
 
   if file.synthetic_only then
@@ -53,11 +90,11 @@ local function build_file_patch(file, selected)
   return table.concat(lines, "\n") .. "\n"
 end
 
-local function build_patch_for_selection(repo, selected)
+local function build_patch_for_selection(repo, selected, opts)
   local patches = {}
 
   for _, path in ipairs(repo.file_order) do
-    local patch = build_file_patch(repo.files_by_path[path], selected)
+    local patch = build_file_patch(repo.files_by_path[path], selected, opts)
 
     if patch and patch ~= "\n" then
       table.insert(patches, (patch:gsub("\n+$", "")))
@@ -109,8 +146,8 @@ function M.parse_unified_diff(diff_text)
     end
 
     current_file.path = path
-    current_file.base_exists = current_file.old_marker ~= "/dev/null"
-    current_file.final_exists = current_file.new_marker ~= "/dev/null"
+    current_file.base_exists = current_file.old_marker ~= nil and current_file.old_marker ~= "/dev/null"
+    current_file.final_exists = current_file.new_marker ~= nil and current_file.new_marker ~= "/dev/null"
     current_file.items_by_id = {}
     current_file.item_ids = {}
     current_file.synthetic_only = #current_file.hunks == 0
@@ -118,7 +155,14 @@ function M.parse_unified_diff(diff_text)
     if current_file.synthetic_only then
       next_item = next_item + 1
       local id = "F" .. next_item
-      local item = { id = id, kind = "file", path = path, label = "file-level change", patch_lines = {} }
+      local item = {
+        id = id,
+        kind = current_file.is_binary and "binary" or "file",
+        path = path,
+        label = current_file.is_binary and "binary file (content omitted)" or "file-level change",
+        patch_lines = {},
+        is_binary = current_file.is_binary,
+      }
       current_file.items_by_id[id] = item
       current_file.item_ids = { id }
       items_by_id[id] = item
@@ -127,7 +171,14 @@ function M.parse_unified_diff(diff_text)
       for _, hunk in ipairs(current_file.hunks) do
         next_item = next_item + 1
         local id = "H" .. next_item
-        local item = { id = id, kind = "hunk", path = path, label = hunk.header, patch_lines = vim.deepcopy(hunk.lines) }
+        local item = {
+          id = id,
+          kind = "hunk",
+          path = path,
+          label = hunk.header,
+          patch_lines = vim.deepcopy(hunk.lines),
+          is_binary = false,
+        }
         current_file.items_by_id[id] = item
         table.insert(current_file.item_ids, id)
         items_by_id[id] = item
@@ -144,7 +195,7 @@ function M.parse_unified_diff(diff_text)
     if line:match "^diff %-%-git " then
       finalize_file()
 
-      local old, new = line:match "^diff %-%-git a/(.+) b/(.+)$"
+      local old, new = line:match "^diff %-%-git a/(.-) b/(.+)$"
       current_file = {
         diff_old_path = old,
         diff_new_path = new,
@@ -158,7 +209,20 @@ function M.parse_unified_diff(diff_text)
     elseif current_file then
       table.insert(current_file.original_patch_lines, line)
 
-      if line:match "^Binary files " or line == "GIT binary patch" then
+      if line:match "^new file mode " then
+        current_file.old_marker = "/dev/null"
+      elseif line:match "^deleted file mode " then
+        current_file.new_marker = "/dev/null"
+      elseif line:match "^Binary files " then
+        current_file.is_binary = true
+
+        local old_marker, new_marker = line:match "^Binary files (.-) and (.+) differ$"
+
+        if old_marker and new_marker then
+          current_file.old_marker = old_marker
+          current_file.new_marker = new_marker
+        end
+      elseif line == "GIT binary patch" then
         current_file.is_binary = true
       elseif line == "\\ No newline at end of file" then
         current_file.has_no_newline_marker = true
@@ -192,22 +256,22 @@ end
 -- Public diff builders
 ---------------------------------------------------------------------------
 
-function M.build_item_diff(session, item_id)
+function M.build_item_diff(session, item_id, opts)
   if not session.repo.items_by_id[item_id] then
     return ""
   end
 
-  return build_patch_for_selection(session.repo, { [item_id] = true })
+  return build_patch_for_selection(session.repo, { [item_id] = true }, opts)
 end
 
-function M.build_group_diff(session, group_id)
+function M.build_group_diff(session, group_id, opts)
   local group = session.groups_by_id[group_id]
 
   if not group then
     return ""
   end
 
-  return build_patch_for_selection(session.repo, utils.to_set(group.item_ids))
+  return build_patch_for_selection(session.repo, utils.to_set(group.item_ids), opts)
 end
 
 function M.build_all_preview(session)
@@ -224,7 +288,7 @@ function M.build_all_preview(session)
     end
 
     table.insert(parts, "")
-    vim.list_extend(parts, utils.split_lines(M.build_group_diff(session, group.id)))
+    vim.list_extend(parts, utils.split_lines(M.build_group_diff(session, group.id, { binary_mode = "omit" })))
     table.insert(parts, "")
   end
 
