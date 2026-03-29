@@ -91,51 +91,76 @@ local function strip_fences(text)
 end
 
 local function request_chat(config, prompt, system_prompt, label, callback)
+  local debug_path = nil
   if config.debug then
     local dir = vim.fn.stdpath "cache" .. "/ai-split-commit-debug"
     vim.fn.mkdir(dir, "p")
+    debug_path = string.format("%s/%s.txt", dir, os.date "%Y%m%d_%H%M%S")
 
-    local f = io.open(string.format("%s/%s.txt", dir, os.date "%Y%m%d_%H%M%S"), "w")
-
+    local f = io.open(debug_path, "w")
     if f then
       f:write("=== SYSTEM ===\n" .. (system_prompt or "") .. "\n\n=== USER ===\n" .. (prompt or ""))
       f:close()
     end
   end
 
-  local body = {
-    model = config.model,
-    messages = {
-      { role = "system", content = system_prompt },
-      { role = "user", content = prompt },
-    },
-  }
+  local ai = require "ai-provider"
+  local model = ai.get_model(config.provider, config.model)
 
-  if config.max_tokens then
-    body.max_tokens = config.max_tokens
+  if not model then
+    return callback(nil, "Unknown model: " .. config.provider .. "/" .. config.model)
   end
 
-  require("ai-provider").request({
-    provider = config.provider,
-    model = config.model,
-    body = body,
-    label = label,
-  }, function(response, err)
-    if err then
-      return callback(nil, err)
+  local context = {
+    system_prompt = system_prompt,
+    messages = { { role = "user", content = prompt } },
+  }
+
+  local options = vim.tbl_deep_extend("force", {
+    max_tokens = config.max_tokens,
+  }, config.ai_options or {})
+
+  ai.complete_simple(model, context, options, function(msg)
+    -- Append response to debug file
+    if debug_path then
+      local df = io.open(debug_path, "a")
+      if df then
+        df:write("\n\n=== RESPONSE ===\n")
+        df:write("stop_reason: " .. (msg.stop_reason or "?") .. "\n")
+        if msg.error_message then df:write("error: " .. msg.error_message .. "\n") end
+        if msg.usage then
+          local u = msg.usage
+          df:write(string.format("usage: %d in / %d out / %d cached",
+            u.input or 0, u.output or 0, u.cache_read or 0))
+          if (u.reasoning_tokens or 0) > 0 then
+            df:write(string.format(" / %d reasoning", u.reasoning_tokens))
+          end
+          df:write("\n")
+        end
+        df:write("\n")
+        for _, block in ipairs(msg.content or {}) do
+          if block.type == "text" and block.text then df:write(block.text) end
+          if block.type == "thinking" and block.thinking then
+            df:write("[thinking]\n" .. block.thinking .. "\n\n")
+          end
+        end
+        df:close()
+      end
     end
 
-    if not response or response.status ~= 200 then
-      return callback(nil, "HTTP error: " .. tostring(response and response.body or "unknown"))
+    if msg.stop_reason == "error" or msg.stop_reason == "aborted" then
+      return callback(nil, msg.error_message or "Request failed")
     end
 
-    local ok, data = pcall(vim.json.decode, response.body)
-
-    if not ok or not data or not data.choices or not data.choices[1] or not data.choices[1].message then
-      return callback(nil, "Invalid AI response")
+    -- Extract text from content blocks
+    local parts = {}
+    for _, block in ipairs(msg.content or {}) do
+      if block.type == "text" and block.text then
+        table.insert(parts, block.text)
+      end
     end
 
-    callback(data.choices[1].message.content or "")
+    callback(table.concat(parts, ""))
   end)
 end
 
