@@ -12,6 +12,8 @@ M.config = {
   grouping_system_prompt = nil,
   default_view_mode = "split", -- "split" or "group_diff"
   use_delta = true, -- use delta (https://github.com/dandavison/delta) for rich diff rendering
+  ai_options = {},   -- per-request passthrough forwarded to ai-provider.complete_simple()
+  ai_provider = nil, -- full ai-provider.setup() passthrough (global)
   keymaps = {
     preset = "default",
   },
@@ -62,14 +64,18 @@ end
 -- Setup
 ---------------------------------------------------------------------------
 
+local function apply_ai_provider_setup(opts)
+  if not opts or not opts.ai_provider then return end
+  require("ai-provider").setup(opts.ai_provider)
+end
+
 function M.setup(opts)
   if opts then
     M.config = vim.tbl_deep_extend("force", M.config, opts)
   end
 
-  if opts and opts.provider_config then
-    require("ai-provider").setup { providers = opts.provider_config }
-  end
+  -- Forward ai-provider config through the consumer plugin for convenience.
+  apply_ai_provider_setup(opts)
 
   local saved = load_saved_model()
 
