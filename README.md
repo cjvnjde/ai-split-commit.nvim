@@ -74,14 +74,81 @@ require("ai-split-commit").setup(opts)
 | `max_item_diff_length` | `number` | `1200` | Per-item diff truncation (in characters) before sending to AI for grouping. Longer hunks are truncated with `... (truncated)`. This controls how much context the AI sees per hunk. |
 | `max_group_count` | `number` | `8` | Soft cap for the number of groups the AI proposes. The AI is instructed to prefer 1 to this many groups. |
 | `ignored_files` | `string[]` | `{}` | List of file paths or glob patterns to omit from AI grouping and AI commit-message generation. Matching files remain visible in the review UI and can still be staged/committed manually. |
-| `debug` | `boolean` | `false` | Save grouping prompts to `~/.cache/nvim/ai-split-commit-debug/` for inspection. |
+| `debug` | `boolean` | `false` | Save grouping prompt + response transcripts to `~/.cache/nvim/ai-split-commit-debug/` for inspection. |
 | `grouping_prompt_template` | `string?` | `nil` | Custom user prompt for the grouping request. When `nil`, the built-in template is used. See [Prompt Customization](#prompt-customization). |
 | `grouping_system_prompt` | `string?` | `nil` | Custom system prompt for the grouping request. When `nil`, the built-in system prompt is used. |
 | `default_view_mode` | `string` | `"split"` | Initial view mode when opening the UI. `"split"` shows groups/changes/diff columns. `"group_diff"` hides the changes column and shows a wider diff. |
 | `use_delta` | `boolean` | `true` | Use [delta](https://github.com/dandavison/delta) for rich diff rendering if it is installed. Falls back to plain diff syntax highlighting when delta is not available or this is `false`. |
 | `keymaps` | `table` | `{ preset = "default" }` | Blink.nvim-style keymap configuration. See [Keymaps](#keymaps). |
 | `keymaps.preset` | `string` | `"default"` | Base keymap preset. `"default"` loads the built-in keymaps. `"none"` starts with no keymaps. |
-| `provider_config` | `table?` | `nil` | Provider-specific settings forwarded to `ai-provider.setup()`. See [ai-provider.nvim](https://github.com/cjvnjde/ai-provider.nvim) for details. |
+| `ai_options` | `table` | `{}` | Per-request options forwarded to `ai-provider.complete_simple()`. Use this for request-scoped settings such as `reasoning`, `temperature`, `headers`, or future request parameters added by `ai-provider.nvim`. |
+| `ai_provider` | `table?` | `nil` | Full shared `ai-provider.setup()` passthrough. Use this to configure global `ai-provider.nvim` behavior such as `reasoning`, `debug`, `debug_toast`, `notification`, `providers`, or `custom_models` directly from `ai-split-commit.nvim`, with no separate `ai-provider.nvim` config block required. |
+
+### `ai_provider` vs `ai_options`
+
+- Use `ai_options` for **grouping requests issued by `ai-split-commit.nvim`**.
+- Use `ai_provider` for **shared/global `ai-provider.nvim` setup**.
+- `debug = true` in `ai-split-commit.nvim` saves a readable grouping prompt/response transcript.
+- `ai_provider.debug = true` saves raw provider-level JSON request/response dumps.
+- If both `ai-split-commit.nvim` and another plugin set `ai_provider`, the resulting `ai-provider.nvim` config is shared, because `ai-provider.nvim` itself is global.
+- In normal setups, you do **not** need a separate `ai-provider.nvim` `opts = { ... }` block at all.
+
+Common patterns:
+
+**1. Higher reasoning only for grouping**
+
+```lua
+opts = {
+  provider = "github-copilot",
+  model = "gpt-5-mini",
+  ai_options = {
+    reasoning = "high",
+  },
+}
+```
+
+**2. Enable debug dumps + live debug toast globally through `ai-split-commit.nvim`**
+
+```lua
+opts = {
+  provider = "github-copilot",
+  model = "gpt-5-mini",
+  ai_options = {
+    reasoning = "high",
+  },
+  ai_provider = {
+    debug = true,
+    debug_toast = { enabled = true },
+    notification = { enabled = true },
+  },
+}
+```
+
+**3. Register or override models without touching `ai-provider.nvim` directly**
+
+```lua
+opts = {
+  provider = "openrouter",
+  model = "google/gemini-3-flash-preview",
+  ai_provider = {
+    custom_models = {
+      openrouter = {
+        {
+          id = "google/gemini-3-flash-preview",
+          name = "Gemini 3 Flash Preview (my preset)",
+          api = "openai-completions",
+          provider = "openrouter",
+          base_url = "https://openrouter.ai/api/v1",
+          reasoning = true,
+          input = { "text", "image" },
+          context_window = 1048576,
+          max_tokens = 65536,
+        },
+      },
+    },
+  },
+}
+```
 
 ---
 
@@ -144,9 +211,11 @@ export OPENROUTER_API_KEY=sk-or-...
   opts = {
     provider = "openrouter",
     model = "google/gemini-2.5-flash",
-    provider_config = {
-      openrouter = {
-        api_key = "sk-or-your-key-here",
+    ai_provider = {
+      providers = {
+        openrouter = {
+          api_key = "sk-or-your-key-here",
+        },
       },
     },
   },
@@ -183,9 +252,11 @@ export OPENROUTER_API_KEY=sk-or-...
   opts = {
     provider = "github-copilot",
     model = "gpt-5-mini",
-    provider_config = {
-      ["github-copilot"] = {
-        enterprise_domain = "company.ghe.com",
+    ai_provider = {
+      providers = {
+        ["github-copilot"] = {
+          enterprise_domain = "company.ghe.com",
+        },
       },
     },
   },
@@ -383,7 +454,7 @@ Use a fast model for grouping in `ai-split-commit.nvim` and a stronger model for
 }
 ```
 
-### 14. Debug mode
+### 14. Debug mode — inspect grouping prompt + response
 
 ```lua
 {
@@ -401,7 +472,7 @@ Use a fast model for grouping in `ai-split-commit.nvim` and a stronger model for
 }
 ```
 
-Prompts are saved to `~/.cache/nvim/ai-split-commit-debug/`.
+Grouping prompt + response transcripts are saved to `~/.cache/nvim/ai-split-commit-debug/`.
 
 ### 15. Full kitchen-sink configuration
 
@@ -434,9 +505,11 @@ Prompts are saved to `~/.cache/nvim/ai-split-commit-debug/`.
       ["<C-j>"] = { "move_group_down", "fallback" },
       ["<C-k>"] = { "move_group_up", "fallback" },
     },
-    provider_config = {
-      ["github-copilot"] = {
-        enterprise_domain = "company.ghe.com",
+    ai_provider = {
+      providers = {
+        ["github-copilot"] = {
+          enterprise_domain = "company.ghe.com",
+        },
       },
     },
   },
